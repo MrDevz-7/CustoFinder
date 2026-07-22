@@ -1,0 +1,1366 @@
+This file is a merged representation of a subset of the codebase, containing specifically included files and files not matching ignore patterns, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of a subset of the repository's contents that is considered the most important context.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Only files matching these patterns are included: **/*.py, requirements.txt, .env.example, README*, alembic.ini
+- Files matching these patterns are excluded: **/alembic/versions/**, **/__pycache__/**, venv/**, .venv/**, **/*.pyc, **/*.pyo
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+alembic/
+  env.py
+analyzer/
+  __init__.py
+api/
+  __init__.py
+  main.py
+  schemas.py
+database/
+  __init__.py
+  config.py
+  models.py
+  session.py
+scheduler/
+  __init__.py
+scrapers/
+  __init__.py
+  maps_discovery.py
+  test_maps_discovery_mock.py
+  test_search_endpoint_e2e.py
+tracker/
+  __init__.py
+.env.example
+alembic.ini
+README.md
+requirements.txt
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="alembic/env.py">
+import os
+import sys
+from logging.config import fileConfig
+
+from sqlalchemy import engine_from_config
+from sqlalchemy import pool
+
+from alembic import context
+
+# Permite importar los módulos de backend/ (database/, etc) cuando Alembic
+# corre desde la carpeta backend/.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from database.config import settings  # noqa: E402
+from database.models import Base  # noqa: E402
+
+# this is the Alembic Config object, which provides
+# access to the values within the .ini file in use.
+config = context.config
+
+# Sobreescribimos la URL de conexión del alembic.ini con la que viene de
+# nuestro .env (una sola fuente de verdad para la DATABASE_URL).
+config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+
+# Interpret the config file for Python logging.
+# This line sets up loggers basically.
+if config.config_file_name is not None:
+    fileConfig(config.config_file_name)
+
+# target_metadata le dice a Alembic "autogenerate" cuál es el estado
+# deseado del esquema (nuestros modelos SQLAlchemy), para compararlo
+# contra el estado real de la base y generar el diff como migración.
+target_metadata = Base.metadata
+
+# other values from the config, defined by the needs of env.py,
+# can be acquired:
+# my_important_option = config.get_main_option("my_important_option")
+# ... etc.
+
+
+def run_migrations_offline() -> None:
+    """Run migrations in 'offline' mode.
+
+    This configures the context with just a URL
+    and not an Engine, though an Engine is acceptable
+    here as well.  By skipping the Engine creation
+    we don't even need a DBAPI to be available.
+
+    Calls to context.execute() here emit the given string to the
+    script output.
+
+    """
+    url = config.get_main_option("sqlalchemy.url")
+    context.configure(
+        url=url,
+        target_metadata=target_metadata,
+        literal_binds=True,
+        dialect_opts={"paramstyle": "named"},
+    )
+
+    with context.begin_transaction():
+        context.run_migrations()
+
+
+def run_migrations_online() -> None:
+    """Run migrations in 'online' mode.
+
+    In this scenario we need to create an Engine
+    and associate a connection with the context.
+
+    """
+    connectable = engine_from_config(
+        config.get_section(config.config_ini_section, {}),
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+    )
+
+    with connectable.connect() as connection:
+        context.configure(
+            connection=connection, target_metadata=target_metadata
+        )
+
+        with context.begin_transaction():
+            context.run_migrations()
+
+
+if context.is_offline_mode():
+    run_migrations_offline()
+else:
+    run_migrations_online()
+</file>
+
+<file path="analyzer/__init__.py">
+
+</file>
+
+<file path="api/__init__.py">
+
+</file>
+
+<file path="api/main.py">
+"""
+App principal de FastAPI.
+
+Se corre con: uvicorn api.main:app --reload --port 8000
+(desde la carpeta backend/, con el venv activado)
+
+`--reload` hace que uvicorn reinicie el servidor automáticamente cada vez
+que guardas un cambio en el código; es solo para desarrollo, en
+producción (Día 7, Railway) no se usa.
+"""
+import logging
+
+from fastapi import FastAPI, Depends, HTTPException
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from database.config import settings
+from database.session import get_db
+from database.models import Business, SearchRun
+from scrapers.maps_discovery import discover_businesses, PlacesAPIError
+from api.schemas import SearchRequest, SearchResponse, HealthResponse
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+app = FastAPI(
+    title="CustoFinder API",
+    description="Sistema de prospección inteligente de clientes para freelancers/agencias de software.",
+    version="0.1.0",
+)
+
+
+@app.get("/api/health", response_model=HealthResponse)
+def health_check() -> HealthResponse:
+    """
+    Healthcheck simple. Railway (Día 7) lo va a golpear periódicamente
+    para saber si el contenedor sigue vivo y responde. Hoy no valida la
+    conexión a la base de datos a propósito: lo dejamos simple para no
+    tumbar el deploy si la DB tarda en arrancar. Si Día 2+ necesitamos
+    un healthcheck "profundo" (que sí chequee la DB), lo agregamos como
+    endpoint separado, ej. /api/health/db.
+    """
+    return HealthResponse(status="ok", environment=settings.ENVIRONMENT)
+
+
+@app.post("/api/search", response_model=SearchResponse)
+def search_businesses(payload: SearchRequest, db: Session = Depends(get_db)) -> SearchResponse:
+    """
+    Flujo:
+    1. Crea un SearchRun (registro de esta corrida).
+    2. Llama a discover_businesses(zone, category) contra Google Places API.
+    3. Hace UPSERT de cada negocio por `place_id`: si ya existe (porque el
+       usuario repitió la búsqueda), actualiza sus datos; si no existe, lo
+       inserta. Esto evita duplicados cuando la misma zona/categoría se
+       busca más de una vez.
+    4. Actualiza el SearchRun con los conteos finales y hace commit.
+    """
+    search_run = SearchRun(zone=payload.zone, category=payload.category)
+    db.add(search_run)
+    db.flush()  # asigna el id sin cerrar la transacción todavía
+
+    try:
+        businesses_data = discover_businesses(zone=payload.zone, category=payload.category)
+    except PlacesAPIError as exc:
+        db.rollback()
+        logger.error("Error llamando Places API: %s", exc)
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    leads_without_website = 0
+
+    for biz in businesses_data:
+        existing = db.scalar(select(Business).where(Business.place_id == biz["place_id"]))
+
+        if existing:
+            # UPDATE: el negocio ya existía (búsqueda repetida). Refrescamos
+            # sus datos por si cambiaron (rating, teléfono, etc).
+            for field, value in biz.items():
+                if field != "place_id":
+                    setattr(existing, field, value)
+        else:
+            # INSERT: negocio nuevo.
+            db.add(Business(**biz))
+
+        if not biz["has_website"]:
+            leads_without_website += 1
+
+    search_run.businesses_found = len(businesses_data)
+    search_run.leads_without_website = leads_without_website
+
+    db.commit()
+    db.refresh(search_run)
+
+    return SearchResponse(
+        run_id=search_run.id,
+        businesses_found=search_run.businesses_found,
+        leads_without_website=search_run.leads_without_website,
+    )
+</file>
+
+<file path="api/schemas.py">
+"""
+Schemas Pydantic.
+
+Un "schema" Pydantic es una clase que define la FORMA y VALIDACIÓN de los
+datos que entran o salen de la API. FastAPI los usa para:
+  1. Validar automáticamente el body de una request (si `zone` no viene
+     o no es string, FastAPI responde 422 antes de que tu código corra).
+  2. Serializar la respuesta a JSON con un contrato fijo y predecible.
+  3. Generar la documentación interactiva en /docs.
+
+Es distinto de los modelos SQLAlchemy (database/models.py): los modelos
+SQLAlchemy describen tablas de la base de datos; los schemas Pydantic
+describen el JSON de entrada/salida de la API. No siempre coinciden
+campo a campo (por ejemplo, la respuesta de /api/search no expone todas
+las columnas de SearchRun).
+"""
+from pydantic import BaseModel, Field
+
+
+class SearchRequest(BaseModel):
+    zone: str = Field(..., min_length=2, examples=["Laureles, Medellín"])
+    category: str = Field(..., min_length=2, examples=["restaurantes"])
+
+
+class SearchResponse(BaseModel):
+    run_id: int
+    businesses_found: int
+    leads_without_website: int
+
+
+class HealthResponse(BaseModel):
+    status: str
+    environment: str
+</file>
+
+<file path="database/__init__.py">
+
+</file>
+
+<file path="database/config.py">
+"""
+Configuración central de la aplicación.
+
+Usamos pydantic-settings para leer variables de entorno de forma tipada.
+Esto evita el patrón `os.getenv("ALGO")` regado por todo el código: acá
+declaramos UNA vez qué variables existen, de qué tipo son, y si tienen
+un valor por defecto. Si falta una variable obligatoria, la app falla
+al arrancar (fail-fast) en vez de fallar a mitad de una request.
+"""
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    DATABASE_URL: str = "postgresql+psycopg2://postgres:postgres@localhost:5432/custofinder"
+    OSM_CONTACT_EMAIL: str = ""
+    GEMINI_API_KEYS: str = ""
+    ENVIRONMENT: str = "development"
+
+
+settings = Settings()
+</file>
+
+<file path="database/models.py">
+"""
+Modelos SQLAlchemy 2.x (sintaxis declarativa moderna con `Mapped` /
+`mapped_column`).
+
+Por qué esta sintaxis y no la "vieja" (`Column(String)` suelto):
+- `Mapped[str]` le dice al editor/type-checker el tipo real de Python
+  de cada atributo, así te autocompleta y  avisa errores de tipo antes
+  de correr el código.
+- `mapped_column(...)` es donde configuro lo específico de la base de
+  datos (tipo de columna SQL, si es nullable, default, índices, etc).
+
+Este archivo define el ESQUEMA COMPLETO del proyecto (5 tablas), aunque
+hoy (Día 1) solo usamos activamente `Business` y `SearchRun`. Las otras
+tres (`Lead`, `CompetitorInfo`, `PipelineEvent`) se llenan de lógica en
+días siguientes, pero las creamos ya para que Alembic las versione desde
+el principio y no tengamos que generar migraciones de "agregar tabla"
+después con datos ya en producción.
+"""
+from datetime import datetime, timezone
+from typing import Optional, List
+
+from sqlalchemy import (
+    String,
+    Float,
+    Integer,
+    Boolean,
+    Text,
+    ForeignKey,
+    CheckConstraint,
+    UniqueConstraint,
+    DateTime,
+)
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+
+def utcnow() -> datetime:
+    """Helper para timestamps en UTC. Evitamos datetime.utcnow() (deprecado
+    en Python 3.12+ y ambiguo sobre timezone); usamos datetime.now(timezone.utc)."""
+    return datetime.now(timezone.utc)
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class Business(Base):
+    """Un negocio local descubierto vía Google Places API."""
+
+    __tablename__ = "businesses"
+    __table_args__ = (UniqueConstraint("place_id", name="uq_business_place_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    place_id: Mapped[str] = mapped_column(String(255), index=True)
+    name: Mapped[str] = mapped_column(String(255))
+    category: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    address: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    zone: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    phone: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    has_website: Mapped[bool] = mapped_column(Boolean, default=False)
+    rating: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    review_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    latitude: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    longitude: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    leads: Mapped[List["Lead"]] = relationship(back_populates="business")
+
+    def __repr__(self) -> str:
+        return f"<Business id={self.id} name={self.name!r} has_website={self.has_website}>"
+
+
+class Lead(Base):
+    """Un negocio evaluado por IA (Día 2) con score de urgencia y
+    seguimiento comercial (pipeline)."""
+
+    __tablename__ = "leads"
+    __table_args__ = (
+        CheckConstraint(
+            "pipeline_stage IN ('nuevo','contactado','respondio','reunion','cerrado','descartado')",
+            name="ck_lead_pipeline_stage",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"))
+    urgency_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    recommended_service: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    # sales_arguments guarda un JSON serializado como texto (Text). En Día 2,
+    # cuando definamos la forma exacta de este JSON, se puede migrar a JSONB
+    # nativo de Postgres si conviene.
+    sales_arguments: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    email_draft: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    pipeline_stage: Mapped[str] = mapped_column(String(20), default="nuevo")
+    analyzed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    business: Mapped["Business"] = relationship(back_populates="leads")
+    competitor_infos: Mapped[List["CompetitorInfo"]] = relationship(back_populates="lead")
+    pipeline_events: Mapped[List["PipelineEvent"]] = relationship(back_populates="lead")
+
+    def __repr__(self) -> str:
+        return f"<Lead id={self.id} business_id={self.business_id} stage={self.pipeline_stage!r}>"
+
+
+class CompetitorInfo(Base):
+    """Información de competidores cercanos al lead (se llena en días
+    siguientes con scraping adicional)."""
+
+    __tablename__ = "competitor_infos"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    lead_id: Mapped[int] = mapped_column(ForeignKey("leads.id", ondelete="CASCADE"))
+    competitor_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    competitor_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    has_online_menu: Mapped[bool] = mapped_column(Boolean, default=False)
+    has_booking: Mapped[bool] = mapped_column(Boolean, default=False)
+    has_ecommerce: Mapped[bool] = mapped_column(Boolean, default=False)
+    has_blog: Mapped[bool] = mapped_column(Boolean, default=False)
+    scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    lead: Mapped["Lead"] = relationship(back_populates="competitor_infos")
+
+
+class PipelineEvent(Base):
+    """Historial de cambios de etapa de un Lead (auditoría del embudo
+    comercial). Se llena cuando el equipo mueve un lead de etapa."""
+
+    __tablename__ = "pipeline_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    lead_id: Mapped[int] = mapped_column(ForeignKey("leads.id", ondelete="CASCADE"))
+    from_stage: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    to_stage: Mapped[str] = mapped_column(String(20))
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    lead: Mapped["Lead"] = relationship(back_populates="pipeline_events")
+
+
+class SearchRun(Base):
+    """Registro de cada corrida de búsqueda/prospección (una llamada a
+    POST /api/search)."""
+
+    __tablename__ = "search_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    zone: Mapped[str] = mapped_column(String(120))
+    category: Mapped[str] = mapped_column(String(120))
+    businesses_found: Mapped[int] = mapped_column(Integer, default=0)
+    leads_without_website: Mapped[int] = mapped_column(Integer, default=0)
+    run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    def __repr__(self) -> str:
+        return f"<SearchRun id={self.id} zone={self.zone!r} category={self.category!r}>"
+</file>
+
+<file path="database/session.py">
+"""
+Motor de conexión (engine) y fábrica de sesiones de SQLAlchemy.
+
+- `engine`: mantiene un POOL de conexiones abiertas hacia Postgres.
+  Abrir una conexión TCP nueva en cada request es caro (handshake,
+  auth, etc). El pool reutiliza conexiones ya abiertas y las presta/
+  devuelve a medida que las requests las necesitan. `pool_pre_ping=True`
+  hace un chequeo liviano antes de prestar una conexión, para descartar
+  conexiones muertas (por ejemplo si Postgres se reinició).
+- `SessionLocal`: fábrica de sesiones. Una "sesión" en SQLAlchemy es la
+  unidad de trabajo con la base de datos: agrupa las queries de una
+  request, y decide cuándo hacer commit/rollback.
+- `get_db()`: dependencia de FastAPI. FastAPI la inyecta en cada endpoint
+  que la declare como parámetro, abre una sesión, se la pasa al endpoint,
+  y al terminar (incluso si hubo excepción) la cierra. Este patrón
+  garantiza que no queden conexiones abiertas colgadas.
+"""
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from typing import Generator
+
+from database.config import settings
+
+engine = create_engine(settings.DATABASE_URL, pool_pre_ping=True, future=True)
+
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+
+def get_db() -> Generator:
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+</file>
+
+<file path="scheduler/__init__.py">
+
+</file>
+
+<file path="scrapers/__init__.py">
+
+</file>
+
+<file path="scrapers/maps_discovery.py">
+"""
+Descubrimiento de negocios locales vía OpenStreetMap (Nominatim + Overpass API).
+
+DECISIÓN TÉCNICA (Día 2): se migra de Google Places API (New) a OpenStreetMap
+por la restricción del proyecto de "100% gratis, sin tarjeta de crédito en
+ningún lado". Google Places API (New) requiere una cuenta de Google Cloud con
+facturación habilitada (tarjeta registrada) para poder usar la API, incluso
+si el uso real cae dentro del crédito gratuito mensual. OSM no requiere
+tarjeta ni cuenta para consultar sus APIs públicas.
+
+LIMITACIONES HONESTAS (léelas antes de confiar en los resultados):
+
+1. Cobertura de datos en Colombia: OSM depende de mapeo colaborativo. En
+   zonas como Laureles/El Poblado en Medellín la cobertura de comercios
+   suele ser razonable, pero en zonas menos mapeadas puede haber muchos
+   negocios reales que simplemente NO están en el mapa. A diferencia de
+   Google Places, un resultado vacío o escaso no siempre significa "no hay
+   negocios ahí" — puede significar "nadie los ha mapeado todavía".
+
+2. Campo "website": su confiabilidad es baja. Un negocio puede tener sitio
+   web real y no tener el tag `website`/`contact:website` cargado en OSM
+   (nadie lo agregó). Esto genera FALSOS POSITIVOS en el sentido inverso al
+   de Día 1: negocios marcados como `has_website=False` que en realidad sí
+   tienen web. Es un trade-off inherente a usar una fuente sin el nivel de
+   verificación de Google Places. Recomendación: tratar `has_website=False`
+   como "candidato a validar manualmente", no como verdad absoluta.
+
+3. Sin rating/review_count: OSM no tiene sistema de reseñas. Estos dos
+   campos del dict quedan siempre en `None`. Si el scoring de urgencia de
+   Gemini (más abajo) usaba estos campos como señal, hay que ajustarlo para
+   no depender de ellos, o buscar otra señal.
+
+4. Rate limiting y User-Agent: tanto Nominatim como Overpass son servicios
+   públicos gratuitos compartidos por toda la comunidad OSM, con políticas
+   de uso estrictas:
+   - Nominatim exige máximo ~1 request/segundo y un User-Agent que
+     identifique la app (idealmente con un contacto real). Política:
+     https://operations.osmfoundation.org/policies/nominatim/
+   - Overpass no tiene un límite fijo documentado, pero excesos devuelven
+     429 y pueden derivar en baneos temporales de IP. Política:
+     https://dev.overpass-api.de/overpass-doc/en/preface/commons.html
+   Este módulo respeta ambas: pausa 1 segundo entre Nominatim y Overpass, y
+   manda un User-Agent identificable (configurable vía OSM_CONTACT_EMAIL
+   en .env).
+
+Este módulo hace DOS llamadas por búsqueda (no por negocio, a diferencia de
+Google Places):
+  a) Nominatim -> GET https://nominatim.openstreetmap.org/search
+     Geocodifica `zone` (texto libre) a un bounding box.
+  b) Overpass -> POST https://overpass-api.de/api/interpreter
+     Trae todos los negocios que matchean el tag de `category` dentro de
+     ese bounding box, en una sola consulta.
+"""
+from __future__ import annotations
+
+import logging
+import time
+from typing import Optional
+
+import httpx
+
+from database.config import settings
+
+logger = logging.getLogger(__name__)
+
+NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+
+# Mapeo de categorías (texto libre en español, como las escribe el usuario)
+# a tags de OpenStreetMap. Si necesitas otra categoría, búscala en
+# https://wiki.openstreetmap.org/wiki/Map_Features y agrégala aquí.
+CATEGORY_TAG_MAP: dict[str, list[tuple[str, str]]] = {
+    "restaurantes": [("amenity", "restaurant")],
+    "cafes": [("amenity", "cafe")],
+    "panaderias": [("shop", "bakery")],
+    "peluquerias": [("shop", "hairdresser")],
+    "barberias": [("shop", "hairdresser")],
+    "gimnasios": [("leisure", "fitness_centre")],
+    "veterinarias": [("amenity", "veterinary")],
+    "odontologos": [("amenity", "dentist")],
+    "clinicas dentales": [("amenity", "dentist")],
+    "farmacias": [("amenity", "pharmacy")],
+    "hoteles": [("tourism", "hotel")],
+    "abogados": [("office", "lawyer")],
+    "contadores": [("office", "accountant")],
+    "talleres mecanicos": [("shop", "car_repair")],
+    "salones de belleza": [("shop", "beauty")],
+    "tiendas de ropa": [("shop", "clothes")],
+    "ferreterias": [("shop", "hardware")],
+}
+
+
+class PlacesAPIError(Exception):
+    """Error genérico al descubrir negocios (Nominatim/Overpass): red, rate
+    limit, zona sin geocodificar, categoría no soportada, etc.
+    Se mantiene el mismo nombre que en Día 1 (aunque ya no hablemos de
+    'Places') para no romper el import en api/main.py."""
+
+
+def _user_agent() -> str:
+    contact = settings.OSM_CONTACT_EMAIL or "sin-contacto-configurado"
+    return f"CustoFinder/0.1 (contacto: {contact})"
+
+
+def _geocode_zone(zone: str, client: httpx.Client) -> tuple[float, float, float, float]:
+    """Geocodifica `zone` con Nominatim y devuelve el bounding box como
+    (south, west, north, east), listo para usar en la query de Overpass."""
+    params = {"q": f"{zone}, Colombia", "format": "json", "limit": 1}
+    headers = {"User-Agent": _user_agent()}
+
+    try:
+        response = client.get(NOMINATIM_URL, params=params, headers=headers, timeout=15.0)
+    except httpx.RequestError as exc:
+        raise PlacesAPIError(f"Error de red llamando Nominatim: {exc}") from exc
+
+    if response.status_code == 429:
+        raise PlacesAPIError(
+            "Rate limit alcanzado en Nominatim (429). Nominatim permite ~1 "
+            "request/segundo; evita disparar búsquedas en paralelo."
+        )
+    if response.status_code != 200:
+        raise PlacesAPIError(
+            f"Nominatim falló con status {response.status_code}: {response.text[:300]}"
+        )
+
+    results = response.json()
+    if not results:
+        raise PlacesAPIError(
+            f"Nominatim no encontró la zona '{zone}'. Prueba con un nombre "
+            "más específico, ej. 'Laureles, Medellín, Colombia'."
+        )
+
+    south, north, west, east = (float(v) for v in results[0]["boundingbox"])
+    return south, west, north, east
+
+
+def _overpass_query(
+    bbox: tuple[float, float, float, float],
+    tags: list[tuple[str, str]],
+    client: httpx.Client,
+) -> list[dict]:
+    """Ejecuta la query Overpass para uno o más pares tag=valor dentro del
+    bbox dado. Devuelve los elementos crudos (nodes/ways/relations)."""
+    bbox_str = ",".join(str(v) for v in bbox)
+
+    filters = "".join(
+        f'node["{k}"="{v}"]({bbox_str});way["{k}"="{v}"]({bbox_str});relation["{k}"="{v}"]({bbox_str});'
+        for k, v in tags
+    )
+    query = f"[out:json][timeout:25];({filters});out center tags;"
+
+    headers = {"User-Agent": _user_agent()}
+    try:
+        response = client.post(OVERPASS_URL, data={"data": query}, headers=headers, timeout=30.0)
+    except httpx.RequestError as exc:
+        raise PlacesAPIError(f"Error de red llamando Overpass: {exc}") from exc
+
+    if response.status_code == 429:
+        raise PlacesAPIError(
+            "Rate limit alcanzado en Overpass API (429). El servidor público "
+            "comparte cuota entre todos los usuarios de OSM; espera unos "
+            "minutos antes de reintentar."
+        )
+    if response.status_code != 200:
+        raise PlacesAPIError(
+            f"Overpass falló con status {response.status_code}: {response.text[:300]}"
+        )
+
+    return response.json().get("elements", [])
+
+
+def _element_to_business_dict(element: dict, zone: str, category: str) -> Optional[dict]:
+    """Convierte un elemento crudo de Overpass (node/way/relation) al dict
+    que espera api/main.py — MISMA forma que en Día 1 con Google Places."""
+    tags = element.get("tags", {})
+    name = tags.get("name")
+    if not name:
+        # Sin nombre no sirve como lead (no hay a quién contactar ni qué
+        # mostrar en el pipeline comercial).
+        return None
+
+    if element["type"] == "node":
+        lat, lon = element.get("lat"), element.get("lon")
+    else:
+        # ways/relations no traen lat/lon directo; "out center" en la query
+        # nos da un punto representativo del polígono.
+        center = element.get("center", {})
+        lat, lon = center.get("lat"), center.get("lon")
+
+    website = tags.get("website") or tags.get("contact:website")
+    phone = tags.get("phone") or tags.get("contact:phone")
+
+    street = tags.get("addr:street", "")
+    housenumber = tags.get("addr:housenumber", "")
+    address = f"{street} {housenumber}".strip() or None
+
+    return {
+        "place_id": f"osm_{element['type']}_{element['id']}",
+        "name": name,
+        "category": category,
+        "address": address,
+        "zone": zone,
+        "phone": phone,
+        "has_website": bool(website),
+        "rating": None,        # OSM no tiene sistema de reseñas.
+        "review_count": None,  # idem.
+        "latitude": lat,
+        "longitude": lon,
+    }
+
+
+def discover_businesses(zone: str, category: str) -> list[dict]:
+    """
+    Descubre negocios de `category` en `zone` usando OpenStreetMap
+    (Nominatim para geocodificar + Overpass para buscar negocios).
+
+    Retorna una lista de dicts con las mismas claves que la versión de
+    Google Places (Día 1), lista para mapear 1:1 a columnas de `businesses`:
+      place_id, name, category, address, zone, phone, has_website,
+      rating, review_count, latitude, longitude
+
+    Maneja los siguientes casos sin tumbar toda la búsqueda:
+    - Elemento sin tag "name" -> se descarta (no sirve como lead).
+    - Zona sin resultados de geocodificación -> levanta PlacesAPIError.
+    - Categoría no mapeada a un tag de OSM -> levanta PlacesAPIError con la
+      lista de categorías soportadas.
+    - Rate limit en Nominatim u Overpass -> levanta PlacesAPIError, que el
+      endpoint /api/search debe capturar y traducir a un HTTP 502/503.
+    """
+    tags = CATEGORY_TAG_MAP.get(category.strip().lower())
+    if not tags:
+        raise PlacesAPIError(
+            f"Categoría '{category}' no está mapeada a un tag de OpenStreetMap "
+            f"todavía. Categorías soportadas hoy: {', '.join(sorted(CATEGORY_TAG_MAP))}. "
+            "Para agregar otra, edita CATEGORY_TAG_MAP en scrapers/maps_discovery.py "
+            "(busca el tag correcto en https://wiki.openstreetmap.org/wiki/Map_Features)."
+        )
+
+    seen_place_ids: set[str] = set()
+    results: list[dict] = []
+
+    with httpx.Client() as client:
+        bbox = _geocode_zone(zone, client)
+        time.sleep(1)  # respeta el límite de ~1 req/seg de Nominatim antes de pegarle a Overpass
+        elements = _overpass_query(bbox, tags, client)
+
+        for element in elements:
+            biz = _element_to_business_dict(element, zone, category)
+            if biz is None:
+                continue
+            if biz["place_id"] in seen_place_ids:
+                continue
+            seen_place_ids.add(biz["place_id"])
+            results.append(biz)
+
+    if not results:
+        logger.info("Overpass sin resultados para zona=%r category=%r", zone, category)
+
+    return results
+</file>
+
+<file path="scrapers/test_maps_discovery_mock.py">
+"""
+Test de humo para discover_businesses() usando un transporte HTTP simulado.
+
+IMPORTANTE: este test NO llama a Nominatim/Overpass reales. Este entorno
+(sandbox de Claude) no tiene salida de red hacia nominatim.openstreetmap.org
+ni overpass-api.de, así que no se pudo probar la integración real desde
+acá. Este test simula las respuestas de ambos servicios con la MISMA forma
+que documentan sus APIs, para validar que el parsing/mapeo a dict de
+negocio funciona correctamente. La prueba con las APIs reales queda para
+que la corras tú (ver instrucciones aparte para probar con una zona real).
+
+Correr con: python -m scrapers.test_maps_discovery_mock
+"""
+import httpx
+
+from scrapers import maps_discovery
+
+
+def fake_transport_handler(request: httpx.Request) -> httpx.Response:
+    if "nominatim.openstreetmap.org" in str(request.url):
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "boundingbox": ["6.230", "6.260", "-75.600", "-75.580"],
+                    "lat": "6.244",
+                    "lon": "-75.590",
+                    "display_name": "Laureles, Medellín, Antioquia, Colombia",
+                }
+            ],
+        )
+    if "overpass-api.de" in str(request.url):
+        return httpx.Response(
+            200,
+            json={
+                "elements": [
+                    {
+                        "type": "node",
+                        "id": 111111111,
+                        "lat": 6.244,
+                        "lon": -75.590,
+                        "tags": {
+                            "name": "Restaurante La Esquina",
+                            "amenity": "restaurant",
+                            "addr:street": "Cra 70",
+                            "addr:housenumber": "45-12",
+                            "phone": "+57 300 1234567",
+                        },
+                    },
+                    {
+                        "type": "way",
+                        "id": 222222222,
+                        "center": {"lat": 6.246, "lon": -75.591},
+                        "tags": {
+                            "name": "Pizzeria Don Luigi",
+                            "amenity": "restaurant",
+                            "website": "https://donluigi.example.com",
+                        },
+                    },
+                    {
+                        # Sin "name": debe descartarse (no sirve como lead)
+                        "type": "node",
+                        "id": 333333333,
+                        "lat": 6.245,
+                        "lon": -75.592,
+                        "tags": {"amenity": "restaurant"},
+                    },
+                ]
+            },
+        )
+    return httpx.Response(404, json={})
+
+
+def run():
+    mock_transport = httpx.MockTransport(fake_transport_handler)
+    original_client = httpx.Client
+
+    class PatchedClient(original_client):
+        def __init__(self, *args, **kwargs):
+            kwargs["transport"] = mock_transport
+            super().__init__(*args, **kwargs)
+
+    maps_discovery.httpx.Client = PatchedClient
+    # No hay rate limit real contra un mock; evitamos el sleep(1) para que
+    # el test corra instantáneo.
+    maps_discovery.time.sleep = lambda _seconds: None
+
+    results = maps_discovery.discover_businesses(zone="Laureles, Medellín", category="restaurantes")
+
+    assert len(results) == 2, f"Se esperaban 2 negocios (el 3ro sin 'name' se descarta), llegaron {len(results)}"
+
+    sin_web = next(r for r in results if r["name"] == "Restaurante La Esquina")
+    con_web = next(r for r in results if r["name"] == "Pizzeria Don Luigi")
+
+    assert sin_web["has_website"] is False
+    assert con_web["has_website"] is True
+    assert sin_web["rating"] is None, "OSM no tiene rating, siempre debe ser None"
+    assert sin_web["review_count"] is None
+    assert sin_web["zone"] == "Laureles, Medellín"
+    assert sin_web["latitude"] == 6.244
+    assert con_web["latitude"] == 6.246, "El centro de un 'way' debe usarse como lat/lon"
+    assert sin_web["address"] == "Cra 70 45-12"
+
+    print("OK - discover_businesses() parsea correctamente las respuestas simuladas de Nominatim + Overpass")
+    print(f"Negocios encontrados: {len(results)}")
+    print(f"Sin sitio web: {sum(1 for r in results if not r['has_website'])}")
+    for r in results:
+        print(" -", r["name"], "| has_website=", r["has_website"], "| place_id=", r["place_id"])
+
+
+if __name__ == "__main__":
+    run()
+</file>
+
+<file path="scrapers/test_search_endpoint_e2e.py">
+"""
+Prueba end-to-end de POST /api/search.
+
+Igual que en test_maps_discovery_mock.py: este sandbox no tiene salida
+de red hacia places.googleapis.com, así que no pude pegarle a la Google
+Places API real. Este script reemplaza discover_businesses() por datos
+simulados (misma forma que produciría la función real) para validar
+TODO lo demás: creación de SearchRun, upsert de Business, conteo de
+leads_without_website, y que los datos queden persistidos en Postgres.
+
+Correr con: ./venv/bin/python -m scrapers.test_search_endpoint_e2e
+"""
+from fastapi.testclient import TestClient
+
+import api.main as main_module
+from database.session import SessionLocal
+from database.models import Business, SearchRun
+
+
+FAKE_BUSINESSES = [
+    {
+        "place_id": "E2E_PLACE_1",
+        "name": "Restaurante La Esquina",
+        "category": "restaurant",
+        "address": "Cra 70 #45-12, Laureles, Medellín",
+        "zone": "Laureles, Medellín",
+        "phone": "+57 300 1234567",
+        "has_website": False,
+        "rating": 4.3,
+        "review_count": 87,
+        "latitude": 6.244,
+        "longitude": -75.590,
+    },
+    {
+        "place_id": "E2E_PLACE_2",
+        "name": "Pizzeria Don Luigi",
+        "category": "restaurant",
+        "address": "Cra 73 #34-20, Laureles, Medellín",
+        "zone": "Laureles, Medellín",
+        "phone": None,
+        "has_website": True,
+        "rating": 4.7,
+        "review_count": 210,
+        "latitude": 6.246,
+        "longitude": -75.591,
+    },
+    {
+        "place_id": "E2E_PLACE_3",
+        "name": "Comidas Rapidas El Parche",
+        "category": "restaurant",
+        "address": "Cra 76 #40-01, Laureles, Medellín",
+        "zone": "Laureles, Medellín",
+        "phone": "+57 300 9998877",
+        "has_website": False,
+        "rating": 4.0,
+        "review_count": 32,
+        "latitude": 6.243,
+        "longitude": -75.593,
+    },
+]
+
+
+def fake_discover_businesses(zone: str, category: str):
+    print(f"[mock] discover_businesses llamado con zone={zone!r} category={category!r}")
+    return FAKE_BUSINESSES
+
+
+def run():
+    # Monkeypatch: reemplazamos la función real por la simulada SOLO en
+    # el módulo api.main (que es donde el endpoint la llama).
+    main_module.discover_businesses = fake_discover_businesses
+
+    client = TestClient(main_module.app)
+
+    # --- Primera corrida: deben insertarse 3 negocios nuevos ---
+    response = client.post(
+        "/api/search",
+        json={"zone": "Laureles, Medellín", "category": "restaurantes"},
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()
+    print("Respuesta 1ra corrida:", data)
+    assert data["businesses_found"] == 3
+    assert data["leads_without_website"] == 2  # PLACE_1 y PLACE_3 no tienen web
+
+    run_id_1 = data["run_id"]
+
+    # --- Verificamos directo en Postgres ---
+    db = SessionLocal()
+    businesses = db.query(Business).filter(Business.zone == "Laureles, Medellín").all()
+    print(f"Negocios en DB tras 1ra corrida: {len(businesses)}")
+    assert len(businesses) == 3
+
+    search_run = db.query(SearchRun).filter(SearchRun.id == run_id_1).first()
+    assert search_run is not None
+    assert search_run.zone == "Laureles, Medellín"
+    db.close()
+
+    # --- Segunda corrida (misma zona/categoría): NO debe duplicar negocios ---
+    response2 = client.post(
+        "/api/search",
+        json={"zone": "Laureles, Medellín", "category": "restaurantes"},
+    )
+    assert response2.status_code == 200, response2.text
+    data2 = response2.json()
+    print("Respuesta 2da corrida (repetida):", data2)
+
+    db = SessionLocal()
+    businesses_after = db.query(Business).filter(Business.zone == "Laureles, Medellín").all()
+    print(f"Negocios en DB tras 2da corrida (debe seguir en 3, no 6): {len(businesses_after)}")
+    assert len(businesses_after) == 3, "El upsert por place_id no está funcionando (hay duplicados)"
+
+    runs_count = db.query(SearchRun).count()
+    print(f"SearchRuns totales en DB: {runs_count} (deben ser 2, una por cada llamada)")
+    assert runs_count == 2
+    db.close()
+
+    print("\nOK - Flujo end-to-end de POST /api/search validado: SearchRun + upsert de Business + conteos correctos.")
+
+
+if __name__ == "__main__":
+    run()
+</file>
+
+<file path="tracker/__init__.py">
+
+</file>
+
+<file path=".env.example">
+# Copia este archivo a .env y completa los valores reales.
+# NUNCA subas el archivo .env (con secretos reales) a git.
+
+# Cadena de conexión a Postgres. Formato:
+# postgresql+psycopg2://<usuario>:<password>@<host>:<puerto>/<nombre_db>
+# Si usas el docker-compose.yml incluido, estos valores ya calzan.
+DATABASE_URL=postgresql+psycopg2://custofinder:custofinder@localhost:5432/custofinder
+
+# OpenStreetMap (Nominatim + Overpass) no requiere API key ni tarjeta.
+# Nominatim pide identificar tu app con un User-Agent que incluya un
+# contacto real (política: https://operations.osmfoundation.org/policies/nominatim/).
+OSM_CONTACT_EMAIL=tu_email@ejemplo.com
+
+# Gemini (Google AI Studio, gratis, sin tarjeta). Una o más API keys
+# separadas por coma, para rotar si una se queda sin cuota.
+GEMINI_API_KEYS=tu_api_key_aqui
+
+# development | production
+ENVIRONMENT=development
+</file>
+
+<file path="alembic.ini">
+# A generic, single database configuration.
+
+[alembic]
+# path to migration scripts
+# Use forward slashes (/) also on windows to provide an os agnostic path
+script_location = alembic
+
+# template used to generate migration file names; The default value is %%(rev)s_%%(slug)s
+# Uncomment the line below if you want the files to be prepended with date and time
+# see https://alembic.sqlalchemy.org/en/latest/tutorial.html#editing-the-ini-file
+# for all available tokens
+# file_template = %%(year)d_%%(month).2d_%%(day).2d_%%(hour).2d%%(minute).2d-%%(rev)s_%%(slug)s
+
+# sys.path path, will be prepended to sys.path if present.
+# defaults to the current working directory.
+prepend_sys_path = .
+
+# timezone to use when rendering the date within the migration file
+# as well as the filename.
+# If specified, requires the python>=3.9 or backports.zoneinfo library.
+# Any required deps can installed by adding `alembic[tz]` to the pip requirements
+# string value is passed to ZoneInfo()
+# leave blank for localtime
+# timezone =
+
+# max length of characters to apply to the "slug" field
+# truncate_slug_length = 40
+
+# set to 'true' to run the environment during
+# the 'revision' command, regardless of autogenerate
+# revision_environment = false
+
+# set to 'true' to allow .pyc and .pyo files without
+# a source .py file to be detected as revisions in the
+# versions/ directory
+# sourceless = false
+
+# version location specification; This defaults
+# to alembic/versions.  When using multiple version
+# directories, initial revisions must be specified with --version-path.
+# The path separator used here should be the separator specified by "version_path_separator" below.
+# version_locations = %(here)s/bar:%(here)s/bat:alembic/versions
+
+# version path separator; As mentioned above, this is the character used to split
+# version_locations. The default within new alembic.ini files is "os", which uses os.pathsep.
+# If this key is omitted entirely, it falls back to the legacy behavior of splitting on spaces and/or commas.
+# Valid values for version_path_separator are:
+#
+# version_path_separator = :
+# version_path_separator = ;
+# version_path_separator = space
+# version_path_separator = newline
+version_path_separator = os  # Use os.pathsep. Default configuration used for new projects.
+
+# set to 'true' to search source files recursively
+# in each "version_locations" directory
+# new in Alembic version 1.10
+# recursive_version_locations = false
+
+# the output encoding used when revision files
+# are written from script.py.mako
+# output_encoding = utf-8
+
+sqlalchemy.url = driver://user:pass@localhost/dbname
+
+
+[post_write_hooks]
+# post_write_hooks defines scripts or Python functions that are run
+# on newly generated revision scripts.  See the documentation for further
+# detail and examples
+
+# format using "black" - use the console_scripts runner, against the "black" entrypoint
+# hooks = black
+# black.type = console_scripts
+# black.entrypoint = black
+# black.options = -l 79 REVISION_SCRIPT_FILENAME
+
+# lint with attempts to fix using "ruff" - use the exec runner, execute a binary
+# hooks = ruff
+# ruff.type = exec
+# ruff.executable = %(here)s/.venv/bin/ruff
+# ruff.options = --fix REVISION_SCRIPT_FILENAME
+
+# Logging configuration
+[loggers]
+keys = root,sqlalchemy,alembic
+
+[handlers]
+keys = console
+
+[formatters]
+keys = generic
+
+[logger_root]
+level = WARNING
+handlers = console
+qualname =
+
+[logger_sqlalchemy]
+level = WARNING
+handlers =
+qualname = sqlalchemy.engine
+
+[logger_alembic]
+level = INFO
+handlers =
+qualname = alembic
+
+[handler_console]
+class = StreamHandler
+args = (sys.stderr,)
+level = NOTSET
+formatter = generic
+
+[formatter_generic]
+format = %(levelname)-5.5s [%(name)s] %(message)s
+datefmt = %H:%M:%S
+</file>
+
+<file path="README.md">
+# CustoFinder — Backend
+
+Sistema de prospección inteligente de clientes para freelancers/agencias de
+software. Descubre negocios locales sin sitio web (Google Places API), los
+evalúa con IA (Gemini — Día 2) y genera propuestas de prospección.
+
+Este README cubre el setup del **backend** (FastAPI + PostgreSQL +
+SQLAlchemy). El frontend (Next.js/TypeScript) se aborda en Día 4-5.
+
+## Requisitos
+
+- Python 3.11 o superior
+- Docker y Docker Compose (para levantar Postgres localmente)
+
+## 1. Clonar y ubicarte en la carpeta backend
+
+```bash
+cd backend
+```
+
+## 2. Levantar Postgres con Docker Compose
+
+```bash
+docker compose up -d
+```
+
+Esto levanta un contenedor de Postgres 16 en `localhost:5432` con:
+- usuario: `custofinder`
+- password: `custofinder`
+- base de datos: `custofinder`
+
+Verifica que esté corriendo y sano:
+
+```bash
+docker compose ps
+```
+
+Deberías ver el servicio `postgres` en estado `healthy`.
+
+## 3. Crear el entorno virtual e instalar dependencias
+
+```bash
+python3 -m venv venv
+source venv/bin/activate        # En Windows: venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+## 4. Configurar variables de entorno
+
+```bash
+cp .env.example .env
+```
+
+Edita `.env` y completa `GOOGLE_PLACES_API_KEY` con tu API key real (ver
+sección "Google Places API" más abajo). Si usaste el `docker-compose.yml`
+tal cual, `DATABASE_URL` ya viene correcta por defecto.
+
+## 5. Aplicar las migraciones de base de datos
+
+```bash
+alembic upgrade head
+```
+
+Esto crea las 5 tablas del esquema (`businesses`, `leads`,
+`competitor_infos`, `pipeline_events`, `search_runs`). Puedes verificarlo
+conectándote a Postgres:
+
+```bash
+docker compose exec postgres psql -U custofinder -d custofinder -c '\dt'
+```
+
+## 6. Levantar el servidor de desarrollo
+
+```bash
+uvicorn api.main:app --reload --port 8000
+```
+
+- Documentación interactiva (Swagger UI): http://localhost:8000/docs
+- Healthcheck: http://localhost:8000/api/health
+
+## 7. Probar el endpoint de búsqueda
+
+```bash
+curl -X POST http://localhost:8000/api/search \
+  -H "Content-Type: application/json" \
+  -d '{"zone": "Laureles, Medellín", "category": "restaurantes"}'
+```
+
+Respuesta esperada:
+
+```json
+{
+  "run_id": 1,
+  "businesses_found": 12,
+  "leads_without_website": 5
+}
+```
+
+(Los números exactos dependen de qué negocios devuelva Google Places para
+esa zona/categoría en el momento de la consulta.)
+
+## OpenStreetMap (Nominatim + Overpass)
+
+No requiere API key ni tarjeta de crédito. Dos servicios públicos gratuitos:
+
+- **Nominatim** geocodifica el texto de `zone` a un área geográfica.
+- **Overpass API** busca negocios dentro de esa área según la categoría.
+
+Configura `OSM_CONTACT_EMAIL` en tu `.env` con un email real (Nominatim pide
+identificar la app que la consulta). Categorías soportadas hoy: ver
+`CATEGORY_TAG_MAP` en `scrapers/maps_discovery.py`.
+
+**Limitaciones a tener en cuenta:** la cobertura de datos en Colombia varía
+por zona, el campo "website" no siempre está cargado aunque el negocio sí
+tenga sitio web, y OSM no tiene rating ni número de reseñas (a diferencia
+de Google Places).
+
+## Estructura del proyecto
+
+```
+backend/
+├── api/                # FastAPI: endpoints y schemas Pydantic
+│   ├── main.py
+│   └── schemas.py
+├── database/           # Modelos SQLAlchemy, conexión, config
+│   ├── models.py
+│   ├── session.py
+│   └── config.py
+├── scrapers/            # Integración Google Places API
+│   └── maps_discovery.py
+├── analyzer/            # Día 2 — análisis con IA (Gemini), vacío por ahora
+├── tracker/              # Día 6 — seguimiento de pipeline, vacío por ahora
+├── scheduler/            # Día 3 — jobs programados, vacío por ahora
+├── alembic/              # Migraciones de base de datos
+├── docker-compose.yml
+├── requirements.txt
+├── .env.example
+└── README.md
+```
+
+## Comandos útiles de Alembic
+
+- Crear una nueva migración a partir de cambios en `database/models.py`:
+  ```bash
+  alembic revision --autogenerate -m "descripción del cambio"
+  ```
+- Aplicar todas las migraciones pendientes:
+  ```bash
+  alembic upgrade head
+  ```
+- Revertir la última migración:
+  ```bash
+  alembic downgrade -1
+  ```
+
+## Apagar el entorno
+
+```bash
+docker compose down          # detiene Postgres (conserva los datos)
+docker compose down -v       # detiene Postgres Y borra los datos (volumen)
+```
+</file>
+
+<file path="requirements.txt">
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+sqlalchemy==2.0.36
+psycopg2-binary==2.9.10
+alembic==1.14.0
+pydantic==2.10.4
+pydantic-settings==2.7.1
+python-dotenv==1.0.1
+httpx==0.28.1
+</file>
+
+</files>
