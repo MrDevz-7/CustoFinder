@@ -43,6 +43,29 @@ app = FastAPI(
     version="0.1.0",
 )
 
+from starlette.middleware.base import BaseHTTPMiddleware
+
+
+class ForceUTF8JSONMiddleware(BaseHTTPMiddleware):
+    """
+    FastAPI no incluye `charset=utf-8` en el header Content-Type de sus
+    respuestas JSON por defecto. Windows PowerShell (Invoke-RestMethod, en
+    su versión 5.1 clásica) tiene un bug conocido: si el charset no viene
+    explícito, decodifica el cuerpo como Latin-1 en vez de UTF-8, y
+    corrompe cualquier tilde/eñe ("é" -> "Ã©"). Este middleware fuerza el
+    charset explícito en cada respuesta para que cualquier cliente HTTP
+    (PowerShell, curl, el frontend de Día 4-5, etc) lo interprete bien.
+    """
+
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        content_type = response.headers.get("content-type", "")
+        if content_type.startswith("application/json") and "charset" not in content_type:
+            response.headers["content-type"] = "application/json; charset=utf-8"
+        return response
+
+
+app.add_middleware(ForceUTF8JSONMiddleware)
 # Cliente de Gemini "perezoso": se crea la primera vez que se necesita,
 # no al arrancar la app. Así, si GEMINI_API_KEYS está mal configurada en
 # .env, /api/health y /api/search siguen funcionando normalmente y el

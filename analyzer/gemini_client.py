@@ -20,6 +20,7 @@ gratuita de Google AI Studio tiene su propia cuota independiente.
 """
 from __future__ import annotations
 
+import json
 import logging
 import time
 from itertools import cycle
@@ -93,7 +94,17 @@ class GeminiClient:
                     raise RuntimeError(f"Error de red llamando a Gemini: {exc}") from exc
 
                 if response.status_code == 200:
-                    data = response.json()
+                    # NO uses response.json() acá: httpx a veces falla al
+                    # adivinar la codificación cuando Google no manda un
+                    # charset explícito en el header Content-Type, y termina
+                    # leyendo los bytes UTF-8 como si fueran Latin-1 (produce
+                    # "Ã©" en vez de "é"). Decodificamos UTF-8 a mano.
+                    try:
+                        data = json.loads(response.content.decode("utf-8"))
+                    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                        raise RuntimeError(
+                            f"No se pudo decodificar la respuesta de Gemini como UTF-8: {exc}"
+                        ) from exc
                     try:
                         return data["candidates"][0]["content"]["parts"][0]["text"]
                     except (KeyError, IndexError) as exc:
