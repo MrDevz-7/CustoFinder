@@ -1,3 +1,9 @@
+import asyncio
+import sys
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
 """
 App principal de FastAPI.
 
@@ -14,12 +20,13 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import FastAPI, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from sqlalchemy.orm import Session
+
 
 from database.config import settings
 from database.session import get_db
-from database.models import Business, SearchRun, Lead
+from database.models import Business, SearchRun, Lead, CompetitorInfo, PipelineEvent, PIPELINE_STAGES
 from scrapers.maps_discovery import discover_businesses, PlacesAPIError
 from analyzer.gemini_client import GeminiClient, GeminiQuotaExhaustedError
 from analyzer.prompt_builder import should_skip_lead
@@ -32,7 +39,15 @@ from api.schemas import (
     LeadDetail,
     LeadListItem,
     GenerateEmailResponse,
+    CompetitorInfoOut,
+    CompetitorsResponse,
+    StageUpdateRequest,
+    LeadStageResponse,
+    PipelineEventOut,
+    PipelineHistoryResponse
 )
+
+from scrapers.competitor_scraper import find_competitors_with_website, analyze_competitor_sites
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -327,3 +342,128 @@ def list_leads_endpoint(
         )
         for lead, business in rows
     ]
+
+@app.post("/api/leads/{lead_id}/competitors", response_model=CompetitorsResponse)
+def scrape_competitors_endpoint(lead_id: int, db: Session = Depends(get_db)) -> CompetitorsResponse:
+    """
+    Dispara el scraping de competencia para este lead:
+    1. Busca hasta 5 negocios cercanos (misma zona/categoría) que sí
+       tengan sitio web, vía OSM.
+    2. Visita cada sitio con Playwright y detecta sus características.
+    3. REEMPLAZA los CompetitorInfo previos de este lead por los nuevos
+       (ver informe de cierre de Día 3 para la justificación).
+    """
+    lead = db.get(Lead, lead_id)
+    if lead is None:
+        raise HTTPException(status_code=404, detail="Lead no encontrado")
+
+    business = db.get(Business, lead.business_id)
+    if business is None:
+        raise HTTPException(status_code=404, detail="El negocio asociado a este lead ya no existe")
+
+    business_dict = {
+        "place_id": business.place_id,
+        "zone": business.zone,
+        "category": business.category,
+    }
+
+    candidates = find_competitors_with_website(business_dict, limit=5)
+    urls = [c["website"] for c in candidates]
+    analyses = analyze_competitor_sites(urls)
+
+    # Reemplazo: borra lo viejo de este lead antes de insertar lo nuevo,
+    # todo dentro de la misma transacción (o todo se guarda, o nada).
+    db.execute(delete(CompetitorInfo).where(CompetitorInfo.lead_id == lead_id))
+
+    new_rows = []
+    errors = 0
+    for candidate, analysis in zip(candidates, analyses):
+        if analysis.get("error"):
+            errors += 1
+            logger.warning(
+                "No se pudo analizar %s (lead_id=%s): %s",
+                candidate.get("website"), lead_id, analysis["error"],
+            )
+            continue
+
+        row = CompetitorInfo(
+            lead_id=lead_id,
+            competitor_name=candidate.get("name"),
+            competitor_url=analysis.get("competitor_url") or candidate.get("website"),
+            has_online_menu=analysis["has_online_menu"],
+            has_booking=analysis["has_booking"],
+            has_ecommerce=analysis["has_ecommerce"],
+            has_blog=analysis["has_blog"],
+        )
+        db.add(row)
+        new_rows.append(row)
+
+    db.commit()
+    for row in new_rows:
+        db.refresh(row)
+
+    return CompetitorsResponse(
+        lead_id=lead_id,
+        competitors_found=len(candidates),
+        competitors_analyzed=len(new_rows),
+        competitors_with_errors=errors,
+        competitors=[CompetitorInfoOut.model_validate(r, from_attributes=True) for r in new_rows],
+    )
+
+
+@app.patch("/api/leads/{lead_id}/stage", response_model=LeadStageResponse)
+def update_lead_stage_endpoint(
+    lead_id: int, payload: StageUpdateRequest, db: Session = Depends(get_db)
+) -> LeadStageResponse:
+    """
+    Cambia el stage de un lead y registra un PipelineEvent con el
+    historial (from_stage -> to_stage). Si el stage pedido es igual al
+    actual, no crea un evento nuevo (evita ruido en el historial) y
+    devuelve changed=False.
+    """
+    lead = db.get(Lead, lead_id)
+    if lead is None:
+        raise HTTPException(status_code=404, detail="Lead no encontrado")
+
+    new_stage = payload.stage.strip().lower()
+    if new_stage not in PIPELINE_STAGES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"stage inválido: '{payload.stage}'. Valores permitidos: {', '.join(PIPELINE_STAGES)}",
+        )
+
+    old_stage = lead.pipeline_stage
+    if new_stage == old_stage:
+        return LeadStageResponse(lead_id=lead_id, from_stage=old_stage, to_stage=new_stage, changed=False)
+
+    lead.pipeline_stage = new_stage
+    event = PipelineEvent(lead_id=lead_id, from_stage=old_stage, to_stage=new_stage)
+    db.add(event)
+    db.commit()
+
+    return LeadStageResponse(lead_id=lead_id, from_stage=old_stage, to_stage=new_stage, changed=True)
+
+
+@app.get("/api/leads/{lead_id}/pipeline-history", response_model=PipelineHistoryResponse)
+def get_pipeline_history_endpoint(lead_id: int, db: Session = Depends(get_db)) -> PipelineHistoryResponse:
+    """Historial completo de cambios de etapa de un lead, en orden cronológico."""
+    lead = db.get(Lead, lead_id)
+    if lead is None:
+        raise HTTPException(status_code=404, detail="Lead no encontrado")
+
+    events = db.scalars(
+        select(PipelineEvent)
+        .where(PipelineEvent.lead_id == lead_id)
+        .order_by(PipelineEvent.changed_at.asc())
+    ).all()
+
+    return PipelineHistoryResponse(
+        lead_id=lead_id,
+        events=[PipelineEventOut.model_validate(e, from_attributes=True) for e in events],
+    )
+
+from scheduler.jobs import start_scheduler
+
+@app.on_event("startup")
+def _on_startup() -> None:
+    start_scheduler()

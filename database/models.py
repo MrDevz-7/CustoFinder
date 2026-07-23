@@ -69,6 +69,25 @@ class Business(Base):
         return f"<Business id={self.id} name={self.name!r} has_website={self.has_website}>"
 
 
+# Los 6 stages permitidos del embudo comercial. DEBEN calzar exacto con el
+# CheckConstraint de la tabla `leads` (ck_lead_pipeline_stage, más abajo) --
+# si agregas un stage aquí sin agregarlo también al CheckConstraint (o
+# viceversa), un PATCH que pase la validación de Python fallará igual al
+# hacer commit, con un IntegrityError de Postgres.
+# Nota: "respondio" y "reunion" van sin tilde a propósito -- estos valores
+# viajan en URLs/JSON/query params y ya tuvimos un bug de encoding en
+# PowerShell con tildes en el body de las respuestas (ver ForceUTF8JSONMiddleware
+# en api/main.py).
+PIPELINE_STAGES: tuple[str, ...] = (
+    "nuevo",
+    "contactado",
+    "respondio",
+    "reunion",
+    "cerrado",
+    "descartado",
+)
+
+
 class Lead(Base):
     """Un negocio evaluado por IA (Día 2) con score de urgencia y
     seguimiento comercial (pipeline)."""

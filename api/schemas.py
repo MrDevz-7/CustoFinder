@@ -74,3 +74,45 @@ class LeadListItem(BaseModel):
     urgency_score: Optional[float] = None
     recommended_service: Optional[str] = None
     pipeline_stage: str
+
+
+class CompetitorInfoOut(BaseModel):
+    id: int
+    competitor_name: Optional[str] = None
+    competitor_url: Optional[str] = None
+    has_online_menu: bool
+    has_booking: bool
+    has_ecommerce: bool
+    has_blog: bool
+    scraped_at: datetime
+
+
+class CompetitorsResponse(BaseModel):
+    lead_id: int
+    competitors_found: int
+    competitors_analyzed: int
+    competitors_with_errors: int
+    competitors: List[CompetitorInfoOut]
+
+
+class StageUpdateRequest(BaseModel):
+    stage: str = Field(..., examples=["contactado"])
+
+
+class LeadStageResponse(BaseModel):
+    lead_id: int
+    from_stage: Optional[str] = None
+    to_stage: str
+    changed: bool  # False si el stage pedido ya era el actual (no-op, no crea evento)
+
+
+class PipelineEventOut(BaseModel):
+    id: int
+    from_stage: Optional[str] = None
+    to_stage: str
+    changed_at: datetime
+
+
+class PipelineHistoryResponse(BaseModel):
+    lead_id: int
+    events: List[PipelineEventOut]

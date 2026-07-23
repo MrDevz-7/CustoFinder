@@ -257,3 +257,46 @@ def discover_businesses(zone: str, category: str) -> list[dict]:
         logger.info("Overpass sin resultados para zona=%r category=%r", zone, category)
 
     return results
+
+def find_businesses_with_website_url(zone: str, category: str) -> list[dict]:
+    """
+    Versión extendida de discover_businesses(), pensada para el scraper de
+    competencia (Día 3). Devuelve las mismas claves que discover_businesses()
+    MÁS una clave adicional "website" (URL cruda del tag de OSM, o None).
+
+    Por qué existe separada de discover_businesses(): esa función no expone
+    la URL real porque la tabla `Business` no la guarda (solo el booleano
+    has_website). Aquí sí la necesitamos, porque Playwright necesita un URL
+    al cual navegar. Para no arriesgar romper /api/search, no toco
+    discover_businesses(); esta función reutiliza los mismos helpers
+    internos (_geocode_zone, _overpass_query, mismo CATEGORY_TAG_MAP) para
+    no duplicar la lógica de geocodificación ni el rate-limiting.
+    """
+    tags = CATEGORY_TAG_MAP.get(category.strip().lower())
+    if not tags:
+        supported = ", ".join(sorted(CATEGORY_TAG_MAP.keys()))
+        raise PlacesAPIError(
+            f"Categoría '{category}' no soportada. Categorías disponibles: {supported}"
+        )
+
+    seen_place_ids: set[str] = set()
+    results: list[dict] = []
+
+    with httpx.Client() as client:
+        bbox = _geocode_zone(zone, client)
+        time.sleep(1)  # mismo respeto al rate limit de Nominatim que discover_businesses()
+        elements = _overpass_query(bbox, tags, client)
+
+    for element in elements:
+        biz = _element_to_business_dict(element, zone, category)
+        if biz is None:
+            continue
+        if biz["place_id"] in seen_place_ids:
+            continue
+        seen_place_ids.add(biz["place_id"])
+
+        element_tags = element.get("tags", {})
+        biz["website"] = element_tags.get("website") or element_tags.get("contact:website")
+        results.append(biz)
+
+    return results
