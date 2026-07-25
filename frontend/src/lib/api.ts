@@ -1,5 +1,4 @@
 // frontend/src/lib/api.ts
-
 import {
   SearchRequest,
   SearchResponse,
@@ -10,6 +9,7 @@ import {
   LeadStageResponse,
   CompetitorsResponse,
   PipelineHistoryResponse,
+  GenerateEmailResponse,
 } from "@/types/api";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL;
@@ -80,4 +80,11 @@ export async function getPipelineHistory(
 ): Promise<PipelineHistoryResponse> {
   const res = await fetch(`${API_URL}/api/leads/${leadId}/pipeline-history`);
   return handleResponse<PipelineHistoryResponse>(res);
+}
+
+export async function generateEmail(leadId: number): Promise<GenerateEmailResponse> {
+  const res = await fetch(`${API_URL}/api/leads/${leadId}/generate-email`, {
+    method: "POST",
+  });
+  return handleResponse<GenerateEmailResponse>(res);
 }

@@ -79,7 +79,11 @@ class GeminiClient:
         payload = {
             "system_instruction": {"parts": [{"text": system_prompt}]},
             "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
-            "generationConfig": {"temperature": 0.3, "maxOutputTokens": 1024},
+            "generationConfig": {
+    "temperature": 0.3,
+    "maxOutputTokens": 2048,
+    "thinkingConfig": {"thinkingBudget": 0},
+},
         }
 
         keys_tried = 0
