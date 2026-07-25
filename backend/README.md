@@ -2,8 +2,8 @@
 
 Sistema de prospección inteligente de clientes para freelancers/agencias de
 software. Descubre negocios locales sin sitio web (OpenStreetMap), los
-evalúa con IA (Gemini), analiza a su competencia local (Playwright), y
-lleva el seguimiento del pipeline de ventas.
+evalúa con IA (Gemini), analiza a su competencia local (Playwright), lleva
+el seguimiento del pipeline de ventas, y mide efectividad por segmento.
 
 Este README cubre el setup del **backend** (FastAPI + PostgreSQL +
 SQLAlchemy). El frontend (Next.js/TypeScript) se aborda desde Día 4 en la
@@ -109,11 +109,21 @@ docker compose exec postgres psql -U custofinder -d custofinder -c "\dt"
 ## 6. Levantar el servidor de desarrollo
 
 ```powershell
-uvicorn api.main:app --reload --port 8000
+python -m uvicorn api.main:app --reload --port 8000
 ```
+
+Usamos `python -m uvicorn` (en vez de solo `uvicorn`) para asegurar que se
+ejecuta con el intérprete del venv activo — en algunos setups de Windows,
+el `uvicorn.exe` que queda en el `PATH` no es el del venv si hay más de un
+Python instalado, y eso genera errores de imports confusos (parece que
+falta una dependencia que en realidad sí está instalada, solo que en el
+otro Python).
 
 - Documentación interactiva (Swagger UI): http://localhost:8000/docs
 - Healthcheck: http://localhost:8000/api/health
+
+Al arrancar, verás en el log una línea de APScheduler confirmando que el
+scheduler quedó activo (ver sección "Scheduler" más abajo).
 
 ## 7. Probar el flujo completo
 
@@ -153,6 +163,15 @@ Invoke-RestMethod -Uri "http://localhost:8000/api/leads/1/stage" -Method Patch -
 ```powershell
 Invoke-RestMethod -Uri "http://localhost:8000/api/leads/1/pipeline-history" -Method Get
 ```
+
+**Ver efectividad por segmento (Día 6):**
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:8000/api/dashboard/effectiveness" -Method Get
+```
+
+Filtros opcionales por query string: `?zone=Laureles, Medellin` y/o
+`?category=restaurantes`.
 
 ## OpenStreetMap (Nominatim + Overpass) — descubrimiento de negocios
 
@@ -223,13 +242,56 @@ actualizar DOS lugares que deben coincidir manualmente: la lista
 `database/models.py` (tabla `leads`). No hay una sola fuente de verdad
 para esto todavía.
 
-## Scheduler (parcialmente implementado, no conectado)
+## Scheduler (conectado desde Día 6)
 
 `scheduler/jobs.py` contiene `check_stale_new_leads()`: revisa leads en
-etapa "nuevo" analizados hace más de 3 días sin avanzar, y los registra
-en el log como advertencia. **Este job existe pero no se ejecuta** — nadie
-llama todavía a `start_scheduler()` desde `api/main.py`. Queda pendiente
-conectarlo (ver checklist de pendientes).
+etapa "nuevo" analizados hace más de `STALE_NUEVO_DAYS` días (hoy: 3) sin
+avanzar de etapa, y los registra en el log como `WARNING`. Sigue siendo
+alcance chico a propósito: **solo loguea**, no envía email ni marca nada
+en la base de datos.
+
+`start_scheduler()` se llama desde el evento `startup` de
+`api/main.py`, así que corre automáticamente apenas arranca uvicorn — no
+hace falta ningún paso manual.
+
+**Frecuencia real:** `scheduler.add_job(check_stale_new_leads, "interval",
+hours=24, ...)`, sin `next_run_time` explícito. Esto significa dos cosas
+importantes:
+- Corre **cada 24 horas** desde que arranca el proceso, no en un horario
+  fijo del día (ej. no es "siempre a las 9am").
+- **No corre inmediatamente al arrancar.** La primera ejecución real
+  ocurre 24h después del startup. Si necesitas verlo correr el mismo día
+  que levantas el servidor (por ejemplo, para confirmar que la lógica
+  funciona), no va a disparar solo por esperar unos minutos — hay que
+  invocar `check_stale_new_leads()` directamente (en una shell de Python,
+  o agregando temporalmente `next_run_time=datetime.now()` al
+  `add_job(...)` mientras se prueba). Si el proyecto necesita en el futuro
+  una corrida inmediata al arrancar además de la periódica, hay que
+  agregar `next_run_time` a `add_job(...)` explícitamente.
+- Si reinicias uvicorn (por ejemplo, con `--reload` al guardar un archivo),
+  el contador de 24h **se reinicia** — el scheduler vive en memoria del
+  proceso, no persiste el último `run_at` en la base de datos.
+
+## Efectividad por segmento (Día 6)
+
+`tracker/segment_analyzer.py` agrupa los leads ya analizados (con
+`urgency_score` asignado) por **rubro + zona + rango de score** (`0-33`,
+`34-66`, `67-100`) y calcula, para cada combinación, cuántos leads llegaron
+ahí y cuántos convirtieron.
+
+**Definición de conversión:** un lead cuenta como convertido si existe al
+menos un `PipelineEvent` con `to_stage == "cerrado"` en su historial — es
+decir, si pasó por "cerrado" alguna vez, no si su `pipeline_stage` actual
+es "cerrado" hoy mismo. Un lead que se cerró y luego se movió a otro
+estado (reapertura, corrección de un error de captura en el kanban) sigue
+contando como conversión. Ver el docstring de
+`compute_segment_effectiveness` para el detalle completo del razonamiento.
+
+Los leads sin `urgency_score` (todavía no analizados por Gemini) se
+excluyen del cálculo.
+
+- `GET /api/dashboard/effectiveness` — tabla agregada en JSON.
+  Filtros opcionales por query string: `zone`, `category`.
 
 ## Endpoints disponibles
 
@@ -242,6 +304,7 @@ conectarlo (ver checklist de pendientes).
 - `POST /api/leads/{lead_id}/competitors` — analiza competencia local (reemplaza análisis previo).
 - `PATCH /api/leads/{lead_id}/stage` — cambia etapa de pipeline.
 - `GET /api/leads/{lead_id}/pipeline-history` — historial de etapas.
+- `GET /api/dashboard/effectiveness?zone=...&category=...` — efectividad por segmento (Día 6).
 
 ## Estructura del proyecto
 
@@ -262,15 +325,22 @@ CustoFinder/
 │   │   ├── gemini_client.py
 │   │   ├── prompt_builder.py
 │   │   └── lead_evaluator.py
-│   ├── scheduler/          # Jobs programados (existe, no conectado aún)
+│   ├── scheduler/          # Jobs programados — conectado desde Día 6
 │   │   └── jobs.py
-│   ├── tracker/            # Día 6 — seguimiento de efectividad, vacío por ahora
-│   ├── alembic/            # Migraciones de base de datos
+│   ├── tracker/            # Día 6 — analytics de efectividad por segmento
+│   │   └── segment_analyzer.py
+│   ├── alembic/             # Migraciones de base de datos
 │   ├── docker-compose.yml
 │   ├── requirements.txt
 │   ├── .env.example
-│   └── README.md           # este archivo
-└── frontend/                # Next.js + TypeScript — desde Día 4
+│   └── README.md            # este archivo
+├── frontend/                 # Next.js + TypeScript — desde Día 4
+│   └── src/app/
+│       ├── search/           # Día 4 — búsqueda de negocios
+│       ├── leads/             # Día 4-5 — lista y detalle de leads
+│       ├── pipeline/          # Día 5 — kanban drag-and-drop
+│       └── analytics/         # Día 6 — efectividad por segmento
+└── docs/                     # Checklists e informes de cierre por día
 ```
 
 ## Comandos útiles de Alembic

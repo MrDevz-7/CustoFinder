@@ -56,8 +56,7 @@ export default function AnalyticsPage() {
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [zoneFilter, categoryFilter]);
+    }, [zoneFilter, categoryFilter]);
 
   const chartData = useMemo(
     () =>

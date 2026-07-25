@@ -44,8 +44,12 @@ from api.schemas import (
     StageUpdateRequest,
     LeadStageResponse,
     PipelineEventOut,
-    PipelineHistoryResponse
+    PipelineHistoryResponse,
+    EffectivenessSegment,
+    EffectivenessResponse,
 )
+
+from tracker.segment_analyzer import compute_segment_effectiveness
 
 from scrapers.competitor_scraper import find_competitors_with_website, analyze_competitor_sites
 
@@ -470,6 +474,24 @@ def get_pipeline_history_endpoint(lead_id: int, db: Session = Depends(get_db)) -
         lead_id=lead_id,
         events=[PipelineEventOut.model_validate(e, from_attributes=True) for e in events],
     )
+
+@app.get("/api/dashboard/effectiveness", response_model=EffectivenessResponse)
+def get_effectiveness_endpoint(
+    zone: Optional[str] = None,
+    category: Optional[str] = None,
+    db: Session = Depends(get_db),
+) -> EffectivenessResponse:
+    """
+    Efectividad por segmento (Día 6): tasa de conversión por rubro + zona +
+    rango de urgency_score. Un lead "convierte" si pasó por pipeline_stage
+    'cerrado' alguna vez (ver tracker/segment_analyzer.py para el porqué).
+    Filtros opcionales por query string: ?zone=...&category=...
+    """
+    segments = compute_segment_effectiveness(db, zone=zone, category=category)
+    return EffectivenessResponse(
+        segments=[EffectivenessSegment(**s) for s in segments]
+    )
+
 
 from scheduler.jobs import start_scheduler
 

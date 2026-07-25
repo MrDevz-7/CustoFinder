@@ -105,3 +105,15 @@ export type PipelineStage =
   | "reunion"
   | "cerrado"
   | "descartado";
+
+export interface EffectivenessSegment {
+  category: string;
+  zone: string;
+  score_range: string;
+  total_leads: number;
+  closed_leads: number;
+  conversion_rate: number;
+}
+export interface EffectivenessResponse {
+  segments: EffectivenessSegment[];
+}    

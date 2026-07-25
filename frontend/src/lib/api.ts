@@ -88,3 +88,19 @@ export async function generateEmail(leadId: number): Promise<GenerateEmailRespon
   });
   return handleResponse<GenerateEmailResponse>(res);
 }
+
+import { EffectivenessResponse } from "@/types/api";
+
+export async function getEffectiveness(params?: {
+  zone?: string;
+  category?: string;
+}): Promise<EffectivenessResponse> {
+  const query = new URLSearchParams();
+  if (params?.zone) query.set("zone", params.zone);
+  if (params?.category) query.set("category", params.category);
+  const qs = query.toString();
+  const res = await fetch(
+    `${API_URL}/api/dashboard/effectiveness${qs ? `?${qs}` : ""}`
+  );
+  return handleResponse<EffectivenessResponse>(res);
+}
