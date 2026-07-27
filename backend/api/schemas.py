@@ -116,3 +116,13 @@ class PipelineEventOut(BaseModel):
 class PipelineHistoryResponse(BaseModel):
     lead_id: int
     events: List[PipelineEventOut]
+
+class EffectivenessSegment(BaseModel):
+    category: str
+    zone: str
+    score_range: str
+    total_leads: int
+    closed_leads: int
+    conversion_rate: float
+class EffectivenessResponse(BaseModel):
+    segments: List[EffectivenessSegment]
