@@ -1,0 +1,14 @@
+venv/
+.venv/
+__pycache__/
+*.pyc
+.env
+.env.docker-test
+.git
+.gitignore
+*.egg-info/
+*_test_output.txt
+*.tmp
+email_draft_test.txt
+docker-compose.yml
+README.md
