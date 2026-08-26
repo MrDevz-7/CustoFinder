@@ -6,7 +6,9 @@ Places: ver docs/DECISIONES_TECNICAS.md.
 """
 from __future__ import annotations
 import logging
+import socket
 import time
+from contextlib import contextmanager
 from typing import Optional
 import httpx
 from database.config import settings
@@ -49,10 +51,29 @@ def _user_agent() -> str:
     return f"CustoFinder/0.1 (contacto: {contact})"
 
 
-def _ipv4_client() -> httpx.Client:
-    """Cliente httpx forzado a IPv4 (algunos hosts gratuitos, ej. Render,
-    no rutean IPv6 de salida). Detalle: docs/DECISIONES_TECNICAS.md."""
-    return httpx.Client(transport=httpx.HTTPTransport(local_address="0.0.0.0"))
+@contextmanager
+def _ipv4_client():
+    """
+    Cliente httpx que fuerza resolución DNS únicamente a IPv4 mientras está
+    activo. Necesario en hosts gratuitos sin ruta de salida IPv6 (ej.
+    Render). Un intento anterior con httpx.HTTPTransport(local_address=...)
+    no alcanzaba: si el DNS devolvía una dirección IPv6 entre los
+    candidatos, igual se intentaba usar y fallaba con "Address family for
+    hostname not supported". Filtrando en el propio socket.getaddrinfo, esa
+    dirección IPv6 nunca llega a proponerse como candidata.
+    Detalle completo: docs/DECISIONES_TECNICAS.md.
+    """
+    original_getaddrinfo = socket.getaddrinfo
+
+    def ipv4_only_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+        return original_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
+
+    socket.getaddrinfo = ipv4_only_getaddrinfo
+    try:
+        with httpx.Client() as client:
+            yield client
+    finally:
+        socket.getaddrinfo = original_getaddrinfo
 
 
 def _geocode_zone(zone: str, client: httpx.Client) -> tuple[float, float, float, float]:
