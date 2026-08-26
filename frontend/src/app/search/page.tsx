@@ -1,4 +1,3 @@
-
 // frontend/src/app/search/page.tsx
 "use client";
 import { useState } from "react";
@@ -9,6 +8,15 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+
+// Zona/categoría con datos confirmados en Postgres para demo. Búsquedas
+// por otro texto pueden depender de que Overpass (API pública gratuita
+// de OpenStreetMap) esté disponible en ese momento, o de que el texto
+// coincida EXACTO con una búsqueda cacheada anterior — ver "Fallos
+// silenciosos de Overpass" en docs/DECISIONES_TECNICAS.md.
+const DEMO_ZONE = "Laureles, Medellín";
+const DEMO_CATEGORY = "restaurantes";
+
 export default function SearchPage() {
   const [zone, setZone] = useState("");
   const [category, setCategory] = useState("");
@@ -21,6 +29,7 @@ export default function SearchPage() {
   // así solo ese botón muestra "Analizando..." y no todos a la vez.
   const [analyzingId, setAnalyzingId] = useState<number | null>(null);
   const [analyzeErrors, setAnalyzeErrors] = useState<Record<number, string>>({});
+
   async function loadBusinesses(z: string, c: string) {
     setBusinessesError(null);
     try {
@@ -32,22 +41,34 @@ export default function SearchPage() {
       );
     }
   }
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
+
+  async function runSearch(z: string, c: string) {
     setLoading(true);
     setError(null);
     setResult(null);
     setBusinesses([]);
     try {
-      const res = await search({ zone, category });
+      const res = await search({ zone: z, category: c });
       setResult(res);
-      await loadBusinesses(zone, category);
+      await loadBusinesses(z, c);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error desconocido");
     } finally {
       setLoading(false);
     }
   }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    await runSearch(zone, category);
+  }
+
+  async function handleDemoSearch() {
+    setZone(DEMO_ZONE);
+    setCategory(DEMO_CATEGORY);
+    await runSearch(DEMO_ZONE, DEMO_CATEGORY);
+  }
+
   async function handleAnalyze(businessId: number) {
     setAnalyzingId(businessId);
     setAnalyzeErrors((prev) => ({ ...prev, [businessId]: "" }));
@@ -69,6 +90,7 @@ export default function SearchPage() {
       setAnalyzingId(null);
     }
   }
+
   return (
     <main className="max-w-2xl mx-auto p-6 space-y-6">
       <h1 className="text-2xl font-bold">Buscar leads</h1>
@@ -95,9 +117,24 @@ export default function SearchPage() {
             required
           />
         </div>
-        <Button type="submit" disabled={loading}>
-          {loading ? "Buscando..." : "Buscar"}
-        </Button>
+        <div className="flex items-center gap-3">
+          <Button type="submit" disabled={loading}>
+            {loading ? "Buscando..." : "Buscar"}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={handleDemoSearch}
+            disabled={loading}
+          >
+            Usar zona de demo (Laureles · restaurantes)
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          La búsqueda depende de OpenStreetMap (gratis, público, a veces
+          degradado) y hace match exacto de texto. Si tu zona da 0
+          resultados, probá con el botón de demo.
+        </p>
       </form>
       {error && (
         <p className="text-red-600 text-sm">Error: {error}</p>
@@ -116,6 +153,13 @@ export default function SearchPage() {
                 degradada en este momento. Estos son resultados guardados de
                 una búsqueda anterior para esta zona/categoría, no datos en
                 vivo.
+              </p>
+            )}
+            {result.businesses_found === 0 && (
+              <p className="text-amber-600 text-sm pt-1">
+                ⚠ 0 negocios para esta zona/categoría exacta. Puede ser que
+                no haya datos mapeados ahí, o que el texto no coincida con
+                una búsqueda anterior. Probá el botón &quot;Usar zona de demo&quot;.
               </p>
             )}
           </CardContent>

@@ -128,3 +128,14 @@ aceptada del stack 100% gratuito, ya mitigada con el respaldo de caché.
 Para demos en vivo, usar una zona/categoría con datos ya confirmados en
 Postgres — hoy: **zona="Laureles, Medellín", categoría="restaurantes"**
 (170 negocios guardados, confirmado 26/08/2026).
+
+## Nota de mantenimiento — limpieza de comentarios (26/08/2026)
+
+Los docstrings largos de `gemini_client.py`, `models.py`,
+`competitor_scraper.py` y `segment_analyzer.py` se acortaron a lo
+esencial. El razonamiento completo de cada decisión (por qué REST directo
+en vez del SDK de Gemini, por qué Alembic desde el día 1, por qué
+Postgres real y no SQLite, la definición exacta de "conversión" en
+analytics) ya estaba documentado en las secciones existentes de este
+archivo o en los informes de cierre de `docs/`; no se perdió información,
+solo se movió del código al lugar correcto.
