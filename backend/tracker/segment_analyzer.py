@@ -37,9 +37,9 @@ from database.models import Lead, Business, PipelineEvent
 # de cada bucket (0-33, 34-66, 67-100) y cubren todo el rango 0-100 sin
 # huecos ni solapamientos.
 SCORE_BUCKETS: tuple[tuple[float, float, str], ...] = (
-    (0, 33, "0-33"),
-    (34, 66, "34-66"),
-    (67, 100, "67-100"),
+    (0, 3.3, "0-3.3 (baja)"),
+    (3.4, 6.6, "3.4-6.6 (media)"),
+    (6.7, 10, "6.7-10 (alta)"),
 )
 
 
@@ -62,7 +62,7 @@ def _score_bucket(score: float) -> str:
     """
     if score < 0:
         return SCORE_BUCKETS[0][2]
-    if score > 100:
+    if score > 10:
         return SCORE_BUCKETS[-1][2]
     for low, high, label in SCORE_BUCKETS:
         if low <= score <= high:
