@@ -63,3 +63,55 @@ falla a nivel de sistema operativo, antes de llegar al servidor.
 dirección IPv4 local y descarta cualquier intento por IPv6. Cambio de bajo
 riesgo: si el servidor de destino tiene IPv4 disponible (caso normal), el
 comportamiento no cambia; si el diagnóstico es correcto, resuelve el error.
+
+
+## Fallos silenciosos de Overpass: "200 OK, 0 negocios" no es lo mismo que "sin resultados"
+
+**Contexto:** después de resolver el 502 de la salida IPv4 (sección
+anterior), `/api/search` empezó a devolver `200 OK` con `businesses_found: 0`
+de forma sistemática (2 de 2 corridas confirmadas en logs de Render,
+25/08/2026). Los logs mostraban `private.coffee` con timeout,
+`overpass-api.de` con connection refused, y `maps.mail.ru` con `200 OK`
+justo antes del "0 negocios".
+
+**Diagnóstico:** cuando Overpass tiene un fallo interno (cuota agotada,
+rate limit silencioso, timeout del lado del servidor), responde con
+status HTTP 200 y un campo `"remark"` en el JSON explicando el error —
+**no** usa un status de error. El código anterior hacía
+`response.json().get("elements", [])` e ignoraba `remark` por completo,
+tratando cualquier lista vacía como "esta zona no tiene negocios de esa
+categoría", sin distinguir eso de "el mirror me bloqueó".
+
+Confirmado además (26/08/2026, wiki oficial de OSM en vivo): a esa fecha
+solo existen 3 mirrors globales gratuitos sin API key (overpass-api.de,
+maps.mail.ru, overpass.private.coffee) — los 2 mirrors adicionales que se
+habían considerado (`overpass.openstreetmap.fr`, `overpass.openstreetmap.ru`)
+ya no figuran en la lista oficial, así que no se agregaron.
+
+**Decisión:**
+1. `_overpass_query()` en `scrapers/maps_discovery.py` ahora lee `remark`:
+   si viene junto con `elements` vacío, se trata como fallo de ESE mirror
+   (se loggea el remark exacto y se prueba el siguiente), no como un
+   resultado legítimo.
+2. Se reordenó `OVERPASS_URLS` con `maps.mail.ru` primero (es el único que
+   completa el handshake TCP desde el rango de IPs de Render hoy),
+   `private.coffee` segundo, `overpass-api.de` último (rechaza la
+   conexión activamente).
+3. Se agregó `AllOverpassMirrorsFailedError`, subclase de `PlacesAPIError`,
+   para distinguir "la infraestructura de Overpass está degradada" de
+   otros errores (categoría no soportada, zona no geocodificable).
+4. **Respaldo en caché:** si todos los mirrors fallan, `POST /api/search`
+   (en `api/main.py`, función `_cached_businesses_for`) busca la última
+   corrida exitosa guardada en Postgres para la misma zona/categoría y la
+   devuelve marcada con `source: "cache"` en vez de responder 502 seco.
+   Esto es clave porque el proyecto depende de infraestructura pública
+   gratuita (tragedy of the commons documentado por la propia comunidad de
+   OSM) que puede estar degradada en el momento exacto de una demo en
+   vivo — un simple 502 en ese momento sería peor que mostrar el último
+   resultado conocido con una advertencia clara.
+
+**Limitación conocida:** el match de caché es por texto exacto de zona
+(case-insensitive). Si se busca "Poblado" una vez y "El Poblado, Medellín"
+otra vez, no las relaciona — son strings distintos. Suficiente para el
+caso de uso actual (repetir la misma búsqueda), no para geocodificación
+difusa.

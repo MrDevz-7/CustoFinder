@@ -1,21 +1,21 @@
 // frontend/src/types/api.ts
-
 export interface SearchRequest {
   zone: string;
   category: string;
 }
-
 export interface SearchResponse {
   run_id: number;
   businesses_found: number;
   leads_without_website: number;
+  // "live": Overpass respondió en esta corrida. "cache": todos los
+  // mirrors de Overpass fallaron y el backend devolvió una búsqueda
+  // anterior guardada para esta zona/categoría. Ver backend/api/schemas.py.
+  source: "live" | "cache";
 }
-
 export interface HealthResponse {
   status: string;
   environment: string;
 }
-
 export interface AnalyzeLeadResponse {
   lead_id: number;
   business_id: number;
@@ -26,12 +26,10 @@ export interface AnalyzeLeadResponse {
   sales_arguments?: string[];
   pipeline_stage: string;
 }
-
 export interface GenerateEmailResponse {
   lead_id: number;
   email_draft: string;
 }
-
 export interface LeadDetail {
   id: number;
   business_id: number;
@@ -45,7 +43,6 @@ export interface LeadDetail {
   pipeline_stage: string;
   analyzed_at?: string;
 }
-
 export interface LeadListItem {
   id: number;
   business_id: number;
@@ -55,7 +52,6 @@ export interface LeadListItem {
   recommended_service?: string;
   pipeline_stage: string;
 }
-
 export interface CompetitorInfoOut {
   id: number;
   competitor_name?: string;
@@ -66,7 +62,6 @@ export interface CompetitorInfoOut {
   has_blog: boolean;
   scraped_at: string;
 }
-
 export interface CompetitorsResponse {
   lead_id: number;
   competitors_found: number;
@@ -74,30 +69,25 @@ export interface CompetitorsResponse {
   competitors_with_errors: number;
   competitors: CompetitorInfoOut[];
 }
-
 export interface StageUpdateRequest {
   stage: string;
 }
-
 export interface LeadStageResponse {
   lead_id: number;
   from_stage?: string;
   to_stage: string;
   changed: boolean;
 }
-
 export interface PipelineEventOut {
   id: number;
   from_stage?: string;
   to_stage: string;
   changed_at: string;
 }
-
 export interface PipelineHistoryResponse {
   lead_id: number;
   events: PipelineEventOut[];
 }
-
 export type PipelineStage =
   | "nuevo"
   | "contactado"
@@ -105,7 +95,6 @@ export type PipelineStage =
   | "reunion"
   | "cerrado"
   | "descartado";
-
 export interface EffectivenessSegment {
   category: string;
   zone: string;
@@ -116,4 +105,4 @@ export interface EffectivenessSegment {
 }
 export interface EffectivenessResponse {
   segments: EffectivenessSegment[];
-}    
+}

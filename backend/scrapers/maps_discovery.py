@@ -5,36 +5,44 @@ Decisiones de diseño, limitaciones conocidas y trade-offs frente a Google
 Places: ver docs/DECISIONES_TECNICAS.md.
 """
 from __future__ import annotations
-
 import logging
 import socket
 import threading
 import time
 from contextlib import contextmanager
 from typing import Optional
-
 import httpx
-
 from database.config import settings
-
 logger = logging.getLogger(__name__)
-
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
-
-# Mirrors públicos de Overpass, en orden de preferencia. El primero
-# (Private.coffee, antes "Kumi Systems") es el recomendado por la propia
-# wiki de OSM para uso intensivo/de cualquier proyecto, sin rate limit
-# propio. overpass-api.de (el "oficial") quedó segundo porque confirmamos
-# en los logs de Render (Aug 25) que rechaza activamente la conexión
-# desde el rango de IPs de datacenter de Render ("[Errno 111] Connection
-# refused"), probablemente por ser tráfico de nube. VK Maps queda como
-# tercer fallback. Detalle completo: docs/DECISIONES_TECNICAS.md.
+# Mirrors públicos de Overpass, en orden de preferencia. Reordenados el
+# 26/08 con evidencia real de logs de Render (ver docs/DECISIONES_TECNICAS.md,
+# sección "Fallos silenciosos de Overpass"):
+# 1. VK Maps (mail.ru): es HOY el único de los 3 que completa el handshake
+#    TCP desde el rango de IPs de Render -- los otros dos ni siquiera
+#    llegan a responder. Tiene un caveat conocido (reportes de la
+#    comunidad de OSM lo describen bloqueado/limitado para ciertos
+#    clientes, respondiendo 200 con "remark" en vez de un error claro),
+#    pero el fix de más abajo ya detecta eso y no lo confunde con "0
+#    resultados reales".
+# 2. Private.coffee (ex Kumi Systems): el mirror que la propia wiki de OSM
+#    recomienda para uso intensivo (sin rate limit propio, 4 servidores de
+#    20 cores/256GB cada uno), pero la wiki de status de Overpass reporta
+#    (05/08/2026) timeouts repetidos de conexión desde IPs de US/cloud
+#    hacia este mirror y hacia overpass-api.de -- degradación real de la
+#    infraestructura pública, no algo que un cambio de código arregle.
+# 3. overpass-api.de (el "oficial"): último porque los logs de Render
+#    muestran que activamente rechaza la conexión ("Connection refused")
+#    desde el rango de IPs de Render, consistente con el mismo reporte.
+# Nota: se evaluó agregar overpass.openstreetmap.fr y overpass.openstreetmap.ru
+# como mirrors extra. NO se agregaron: a fecha 26/08/2026 ya no figuran en
+# la lista oficial de instancias públicas de la wiki de OSM -- agregarlos
+# hubiera sido un parche especulativo sin evidencia de que sigan vivos.
 OVERPASS_URLS: list[str] = [
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
     "https://overpass.private.coffee/api/interpreter",
     "https://overpass-api.de/api/interpreter",
-    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
 ]
-
 # Categoría (texto libre en español) -> tag(s) de OpenStreetMap.
 # Agregar categorías nuevas: https://wiki.openstreetmap.org/wiki/Map_Features
 CATEGORY_TAG_MAP: dict[str, list[tuple[str, str]]] = {
@@ -56,18 +64,24 @@ CATEGORY_TAG_MAP: dict[str, list[tuple[str, str]]] = {
     "tiendas de ropa": [("shop", "clothes")],
     "ferreterias": [("shop", "hardware")],
 }
-
-
 class PlacesAPIError(Exception):
     """Error al descubrir negocios: red, rate limit, zona o categoría
     inválida. Nombre heredado de la integración con Google Places."""
-
-
+class AllOverpassMirrorsFailedError(PlacesAPIError):
+    """
+    Subclase específica de PlacesAPIError: TODOS los mirrors de
+    OVERPASS_URLS fallaron por red o devolvieron un fallo interno
+    (remark) para esta consulta puntual. Existe separada de PlacesAPIError
+    para que api/main.py pueda distinguir "la infraestructura pública de
+    Overpass está degradada ahora mismo" (donde SÍ tiene sentido buscar un
+    respaldo en caché de una corrida anterior) de otros PlacesAPIError
+    como categoría no soportada o zona no geocodificable (donde un
+    respaldo en caché no tiene sentido -- es un error del input, no de la
+    infraestructura). Ver docs/DECISIONES_TECNICAS.md.
+    """
 def _user_agent() -> str:
     contact = settings.OSM_CONTACT_EMAIL or "sin-contacto-configurado"
     return f"CustoFinder/0.1 (contacto: {contact})"
-
-
 # Serializa el acceso a _ipv4_client(): como el monkeypatch de
 # socket.getaddrinfo() es un estado GLOBAL del proceso, dos threads
 # ejecutándolo al mismo tiempo podrían pisarse (uno restaura la función
@@ -78,8 +92,6 @@ def _user_agent() -> str:
 # mucho una request espera unos milisegundos a que la anterior termine
 # de resolver el hostname, nunca hay dos parcheos simultáneos.
 _getaddrinfo_lock = threading.Lock()
-
-
 @contextmanager
 def _ipv4_client():
     """
@@ -95,18 +107,14 @@ def _ipv4_client():
     """
     with _getaddrinfo_lock:
         original_getaddrinfo = socket.getaddrinfo
-
         def ipv4_only_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
             return original_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
-
         socket.getaddrinfo = ipv4_only_getaddrinfo
         try:
             with httpx.Client() as client:
                 yield client
         finally:
             socket.getaddrinfo = original_getaddrinfo
-
-
 def _geocode_zone(zone: str, client: httpx.Client) -> tuple[float, float, float, float]:
     """Geocodifica `zone` con Nominatim. Devuelve bbox (south, west, north, east)."""
     params = {"q": f"{zone}, Colombia", "format": "json", "limit": 1}
@@ -132,8 +140,6 @@ def _geocode_zone(zone: str, client: httpx.Client) -> tuple[float, float, float,
         )
     south, north, west, east = (float(v) for v in results[0]["boundingbox"])
     return south, west, north, east
-
-
 def _overpass_query(
     bbox: tuple[float, float, float, float],
     tags: list[tuple[str, str]],
@@ -142,9 +148,14 @@ def _overpass_query(
     """
     Trae los elementos (nodes/ways/relations) que matchean `tags` dentro de
     `bbox`. Prueba cada URL de OVERPASS_URLS en orden: si una falla por red
-    (conexión rechazada, timeout) o devuelve un status de error, sigue con
-    la siguiente en vez de abortar. Solo lanza PlacesAPIError si TODAS
-    fallan, con el detalle de cada intento.
+    (conexión rechazada, timeout), devuelve un status de error, o devuelve
+    un JSON con "remark" (la forma en que Overpass reporta fallos internos
+    -- cuota agotada, rate limit silencioso, timeout del lado del servidor
+    -- SIN usar un status HTTP de error; confirmado el 26/08 que esto
+    explica el "200 OK, 0 negocios" que veníamos viendo con mail.ru), sigue
+    con la siguiente URL en vez de asumir que la zona no tiene resultados.
+    Solo lanza AllOverpassMirrorsFailedError si TODAS fallan, con el
+    detalle de cada intento.
     """
     bbox_str = ",".join(str(v) for v in bbox)
     filters = "".join(
@@ -153,11 +164,11 @@ def _overpass_query(
     )
     query = f"[out:json][timeout:25];({filters});out center tags;"
     headers = {"User-Agent": _user_agent()}
-    # Timeout corto por mirror (antes: 30s planos). Confirmado en logs de
-    # Render (Aug 25): cuando un mirror está lento en vez de directamente
-    # caído, esperar los 30s completos antes de pasar al siguiente hacía
-    # que el fallback a 3 mirrors tardara +60s en el peor caso. Con esto,
-    # el peor caso (los 3 fallan) baja a ~25-30s en vez de ~90s.
+    # Timeout corto por mirror (sin cambios respecto a la versión anterior:
+    # el log real de Render del 25/08 muestra que private.coffee corta a
+    # los ~8s y mail.ru responde ~4s después, ~9-12s en total -- ya está
+    # bien afinado con evidencia real, no hay motivo para tocarlo sin
+    # evidencia nueva de que haga falta).
     overpass_timeout = httpx.Timeout(connect=4.0, read=8.0, write=5.0, pool=5.0)
     errors: list[str] = []
     for url in OVERPASS_URLS:
@@ -178,12 +189,48 @@ def _overpass_query(
             )
             errors.append(f"{url}: status {response.status_code}: {response.text[:200]}")
             continue
-        return response.json().get("elements", [])
-    raise PlacesAPIError(
-        "Todos los mirrors de Overpass fallaron: " + " | ".join(errors)
+        try:
+            body = response.json()
+        except ValueError as exc:
+            # Status 200 pero el cuerpo no es JSON válido (mirrors
+            # sobrecargados a veces devuelven una página HTML de error con
+            # status 200). Antes de este fix, .json() sin try hubiera
+            # propagado la excepción sin control -- posible causa adicional
+            # de 502 que no habíamos contemplado.
+            logger.warning(
+                "Overpass mirror %s devolvió 200 pero el cuerpo no es JSON válido: %s. Probando el siguiente.",
+                url, exc,
+            )
+            errors.append(f"{url}: 200 con cuerpo no-JSON ({exc})")
+            continue
+        elements = body.get("elements", [])
+        remark = body.get("remark")
+        if remark and not elements:
+            # EL BUG REAL detrás de "200 OK, 0 negocios encontrados"
+            # confirmado en logs de Render (25/08) con mail.ru: Overpass
+            # reporta fallos internos con status 200 + campo "remark", NO
+            # con un status de error. Antes se ignoraba "remark" y se
+            # devolvía [] como si la zona genuinamente no tuviera negocios
+            # de esa categoría. Detalle: docs/DECISIONES_TECNICAS.md.
+            logger.warning(
+                "Overpass mirror %s devolvió 200 con remark=%r y 0 elementos "
+                "(fallo interno del mirror, no ausencia real de datos). Probando el siguiente.",
+                url, remark,
+            )
+            errors.append(f"{url}: remark={remark!r}")
+            continue
+        if remark:
+            # remark presente pero CON datos: probablemente una respuesta
+            # parcial/truncada. Se devuelve igual (mejor datos parciales
+            # que nada) pero queda registrado para diagnóstico futuro.
+            logger.warning(
+                "Overpass mirror %s devolvió remark=%r junto con %d elementos (posible respuesta parcial).",
+                url, remark, len(elements),
+            )
+        return elements
+    raise AllOverpassMirrorsFailedError(
+        "Todos los mirrors de Overpass fallaron o devolvieron un fallo interno: " + " | ".join(errors)
     )
-
-
 def _element_to_business_dict(element: dict, zone: str, category: str) -> Optional[dict]:
     """Convierte un elemento crudo de Overpass al dict que espera api/main.py."""
     tags = element.get("tags", {})
@@ -213,8 +260,6 @@ def _element_to_business_dict(element: dict, zone: str, category: str) -> Option
         "latitude": lat,
         "longitude": lon,
     }
-
-
 def discover_businesses(zone: str, category: str) -> list[dict]:
     """
     Descubre negocios de `category` en `zone` vía OpenStreetMap.
@@ -222,8 +267,9 @@ def discover_businesses(zone: str, category: str) -> list[dict]:
         Lista de dicts: place_id, name, category, address, zone, phone,
         has_website, rating, review_count, latitude, longitude.
     Raises:
-        PlacesAPIError: zona no geocodificable, categoría no soportada,
-        o todos los mirrors de Nominatim/Overpass fallaron.
+        PlacesAPIError: categoría no soportada o zona no geocodificable.
+        AllOverpassMirrorsFailedError (subclase de PlacesAPIError): todos
+        los mirrors de Overpass fallaron o devolvieron un fallo interno.
     """
     tags = CATEGORY_TAG_MAP.get(category.strip().lower())
     if not tags:
@@ -248,8 +294,6 @@ def discover_businesses(zone: str, category: str) -> list[dict]:
     if not results:
         logger.info("Overpass sin resultados para zona=%r category=%r", zone, category)
     return results
-
-
 def find_businesses_with_website_url(zone: str, category: str) -> list[dict]:
     """
     Como discover_businesses(), más la clave "website" (URL cruda de OSM)
