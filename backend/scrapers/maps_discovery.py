@@ -153,10 +153,16 @@ def _overpass_query(
     )
     query = f"[out:json][timeout:25];({filters});out center tags;"
     headers = {"User-Agent": _user_agent()}
+    # Timeout corto por mirror (antes: 30s planos). Confirmado en logs de
+    # Render (Aug 25): cuando un mirror está lento en vez de directamente
+    # caído, esperar los 30s completos antes de pasar al siguiente hacía
+    # que el fallback a 3 mirrors tardara +60s en el peor caso. Con esto,
+    # el peor caso (los 3 fallan) baja a ~25-30s en vez de ~90s.
+    overpass_timeout = httpx.Timeout(connect=4.0, read=8.0, write=5.0, pool=5.0)
     errors: list[str] = []
     for url in OVERPASS_URLS:
         try:
-            response = client.post(url, data={"data": query}, headers=headers, timeout=30.0)
+            response = client.post(url, data={"data": query}, headers=headers, timeout=overpass_timeout)
         except httpx.RequestError as exc:
             logger.warning("Overpass mirror %s no respondió: %s. Probando el siguiente.", url, exc)
             errors.append(f"{url}: error de red ({exc})")
