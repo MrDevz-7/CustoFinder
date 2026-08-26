@@ -1,3 +1,4 @@
+
 import asyncio
 import sys
 if sys.platform == "win32":
@@ -27,6 +28,7 @@ from analyzer.lead_evaluator import parse_gemini_response, GeminiResponseParseEr
 from api.schemas import (
     SearchRequest,
     SearchResponse,
+    BusinessOut,
     HealthResponse,
     AnalyzeLeadResponse,
     LeadDetail,
@@ -133,6 +135,39 @@ def _cached_businesses_for(zone: str, category: str, db: Session) -> list[dict]:
         }
         for b in rows
     ]
+def _businesses_out_for(zone: str, category: str, db: Session) -> list[BusinessOut]:
+    """
+    Igual que _cached_businesses_for pero para consumo del FRONTEND (no
+    para el flujo de upsert de /api/search): incluye `id` real y datos
+    del Lead asociado si ya existe. Separada a propósito de
+    _cached_businesses_for por el mismo motivo documentado en
+    docs/DECISIONES_TECNICAS.md para find_businesses_with_website_url():
+    evita tocar una función que ya funciona (el upsert de /api/search)
+    para no arriesgar romperla por un cambio de forma de datos.
+    """
+    rows = db.execute(
+        select(Business, Lead)
+        .outerjoin(Lead, Lead.business_id == Business.id)
+        .where(func.lower(Business.zone) == zone.strip().lower())
+        .where(func.lower(Business.category) == category.strip().lower())
+        .order_by(Business.created_at.desc())
+    ).all()
+    return [
+        BusinessOut(
+            id=b.id,
+            name=b.name,
+            category=b.category,
+            address=b.address,
+            zone=b.zone,
+            phone=b.phone,
+            has_website=b.has_website,
+            rating=b.rating,
+            review_count=b.review_count,
+            lead_id=lead.id if lead else None,
+            lead_analyzed=bool(lead and lead.analyzed_at is not None),
+        )
+        for b, lead in rows
+    ]
 @app.get("/api/health", response_model=HealthResponse)
 def health_check() -> HealthResponse:
     """
@@ -221,6 +256,20 @@ def search_businesses(payload: SearchRequest, db: Session = Depends(get_db)) -> 
         leads_without_website=search_run.leads_without_website,
         source=source,
     )
+@app.get("/api/businesses", response_model=List[BusinessOut])
+def list_businesses_endpoint(
+    zone: str, category: str, db: Session = Depends(get_db)
+) -> List[BusinessOut]:
+    """
+    Negocios descubiertos para una zona/categoría, con su `id` real y si
+    ya tienen un Lead asociado. Alimenta la sección "Analizar con Gemini"
+    en el frontend después de una búsqueda -- ver
+    docs/DECISIONES_TECNICAS.md, sección sobre por qué está separada de
+    _cached_businesses_for. No dispara ninguna llamada a OSM: solo lee lo
+    que ya quedó guardado en Postgres por una corrida previa de
+    /api/search para esa misma zona/categoría.
+    """
+    return _businesses_out_for(zone, category, db)
 @app.post("/api/leads/{business_id}/analyze", response_model=AnalyzeLeadResponse)
 def analyze_lead_endpoint(
     business_id: int, force: bool = False, db: Session = Depends(get_db)

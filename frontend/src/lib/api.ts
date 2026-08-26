@@ -1,7 +1,9 @@
+
 // frontend/src/lib/api.ts
 import {
   SearchRequest,
   SearchResponse,
+  BusinessOut,
   HealthResponse,
   LeadDetail,
   LeadListItem,
@@ -10,10 +12,9 @@ import {
   CompetitorsResponse,
   PipelineHistoryResponse,
   GenerateEmailResponse,
+  AnalyzeLeadResponse,
 } from "@/types/api";
-
 const API_URL = process.env.NEXT_PUBLIC_API_URL;
-
 async function handleResponse<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -21,12 +22,10 @@ async function handleResponse<T>(res: Response): Promise<T> {
   }
   return res.json();
 }
-
 export async function getHealth(): Promise<HealthResponse> {
   const res = await fetch(`${API_URL}/api/health`);
   return handleResponse<HealthResponse>(res);
 }
-
 export async function search(payload: SearchRequest): Promise<SearchResponse> {
   const res = await fetch(`${API_URL}/api/search`, {
     method: "POST",
@@ -35,7 +34,20 @@ export async function search(payload: SearchRequest): Promise<SearchResponse> {
   });
   return handleResponse<SearchResponse>(res);
 }
-
+export async function getBusinesses(
+  zone: string,
+  category: string
+): Promise<BusinessOut[]> {
+  const query = new URLSearchParams({ zone, category });
+  const res = await fetch(`${API_URL}/api/businesses?${query.toString()}`);
+  return handleResponse<BusinessOut[]>(res);
+}
+export async function analyzeLead(businessId: number): Promise<AnalyzeLeadResponse> {
+  const res = await fetch(`${API_URL}/api/leads/${businessId}/analyze`, {
+    method: "POST",
+  });
+  return handleResponse<AnalyzeLeadResponse>(res);
+}
 export async function getLeads(params?: {
   stage?: string;
   min_urgency?: number;
@@ -48,12 +60,10 @@ export async function getLeads(params?: {
   const res = await fetch(`${API_URL}/api/leads${qs ? `?${qs}` : ""}`);
   return handleResponse<LeadListItem[]>(res);
 }
-
 export async function getLead(leadId: number): Promise<LeadDetail> {
   const res = await fetch(`${API_URL}/api/leads/${leadId}`);
   return handleResponse<LeadDetail>(res);
 }
-
 export async function updateLeadStage(
   leadId: number,
   payload: StageUpdateRequest
@@ -65,7 +75,6 @@ export async function updateLeadStage(
   });
   return handleResponse<LeadStageResponse>(res);
 }
-
 export async function getCompetitors(
   leadId: number
 ): Promise<CompetitorsResponse> {
@@ -74,23 +83,19 @@ export async function getCompetitors(
   });
   return handleResponse<CompetitorsResponse>(res);
 }
-
 export async function getPipelineHistory(
   leadId: number
 ): Promise<PipelineHistoryResponse> {
   const res = await fetch(`${API_URL}/api/leads/${leadId}/pipeline-history`);
   return handleResponse<PipelineHistoryResponse>(res);
 }
-
 export async function generateEmail(leadId: number): Promise<GenerateEmailResponse> {
   const res = await fetch(`${API_URL}/api/leads/${leadId}/generate-email`, {
     method: "POST",
   });
   return handleResponse<GenerateEmailResponse>(res);
 }
-
 import { EffectivenessResponse } from "@/types/api";
-
 export async function getEffectiveness(params?: {
   zone?: string;
   category?: string;

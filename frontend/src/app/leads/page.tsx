@@ -1,7 +1,8 @@
+
 // frontend/src/app/leads/page.tsx
 "use client";
-
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { getLeads } from "@/lib/api";
 import { LeadListItem, PipelineStage } from "@/types/api";
 import {
@@ -21,7 +22,6 @@ import {
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-
 const STAGES: PipelineStage[] = [
   "nuevo",
   "contactado",
@@ -30,19 +30,16 @@ const STAGES: PipelineStage[] = [
   "cerrado",
   "descartado",
 ];
-
 export default function LeadsPage() {
   const [leads, setLeads] = useState<LeadListItem[]>([]);
   const [stage, setStage] = useState<string>("all");
   const [minUrgency, setMinUrgency] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
-
     getLeads({
       stage: stage !== "all" ? stage : undefined,
       min_urgency: minUrgency ? Number(minUrgency) : undefined,
@@ -57,21 +54,18 @@ export default function LeadsPage() {
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
-
     return () => {
       cancelled = true;
     };
   }, [stage, minUrgency]);
-
   return (
     <main className="max-w-4xl mx-auto p-6 space-y-6">
       <h1 className="text-2xl font-bold">Leads</h1>
-
       <div className="flex gap-4 items-end">
         <div className="space-y-2">
-          <Label>Stage</Label>
+          <Label htmlFor="stage-filter">Stage</Label>
           <Select value={stage} onValueChange={(value) => setStage(value ?? "all")}>
-            <SelectTrigger className="w-40">
+            <SelectTrigger id="stage-filter" className="w-40">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -84,10 +78,11 @@ export default function LeadsPage() {
             </SelectContent>
           </Select>
         </div>
-
         <div className="space-y-2">
-          <Label>Urgencia mínima</Label>
+          <Label htmlFor="min-urgency">Urgencia mínima</Label>
           <Input
+            id="min-urgency"
+            name="min_urgency"
             type="number"
             value={minUrgency}
             onChange={(e) => setMinUrgency(e.target.value)}
@@ -96,10 +91,8 @@ export default function LeadsPage() {
           />
         </div>
       </div>
-
       {loading && <p className="text-sm text-gray-500">Cargando...</p>}
       {error && <p className="text-red-600 text-sm">Error: {error}</p>}
-
       {!loading && !error && (
         <Table>
           <TableHeader>
@@ -120,8 +113,12 @@ export default function LeadsPage() {
               </TableRow>
             )}
             {leads.map((lead) => (
-              <TableRow key={lead.id}>
-                <TableCell>{lead.business_name}</TableCell>
+              <TableRow key={lead.id} className="cursor-pointer hover:bg-muted/50">
+                <TableCell className="p-0">
+                  <Link href={`/leads/${lead.id}`} className="block px-4 py-2">
+                    {lead.business_name}
+                  </Link>
+                </TableCell>
                 <TableCell>{lead.zone ?? "-"}</TableCell>
                 <TableCell>{lead.urgency_score ?? "-"}</TableCell>
                 <TableCell>{lead.recommended_service ?? "-"}</TableCell>

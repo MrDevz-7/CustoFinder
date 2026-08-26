@@ -1,3 +1,4 @@
+
 // frontend/src/types/api.ts
 export interface SearchRequest {
   zone: string;
@@ -11,6 +12,19 @@ export interface SearchResponse {
   // mirrors de Overpass fallaron y el backend devolvió una búsqueda
   // anterior guardada para esta zona/categoría. Ver backend/api/schemas.py.
   source: "live" | "cache";
+}
+export interface BusinessOut {
+  id: number;
+  name: string;
+  category?: string;
+  address?: string;
+  zone?: string;
+  phone?: string;
+  has_website: boolean;
+  rating?: number;
+  review_count?: number;
+  lead_id?: number;
+  lead_analyzed: boolean;
 }
 export interface HealthResponse {
   status: string;

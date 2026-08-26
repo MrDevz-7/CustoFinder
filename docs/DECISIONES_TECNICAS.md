@@ -115,3 +115,16 @@ ya no figuran en la lista oficial, así que no se agregaron.
 otra vez, no las relaciona — son strings distintos. Suficiente para el
 caso de uso actual (repetir la misma búsqueda), no para geocodificación
 difusa.
+
+
+**Estado final (26/08/2026):** confirmado en producción que el problema
+de fondo es 100% externo — en una prueba real los 3 mirrors fallaron
+simultáneamente (timeout, 502 propio del mirror, connection refused);
+minutos después, la misma búsqueda exacta devolvió `200 OK` con datos
+reales. Esto coincide con reportes activos en el foro de OSM durante todo
+2026 sobre sobrecarga del servicio (enero, mayo, julio, agosto). **No se
+persigue más este problema con cambios de código** — es una limitación
+aceptada del stack 100% gratuito, ya mitigada con el respaldo de caché.
+Para demos en vivo, usar una zona/categoría con datos ya confirmados en
+Postgres — hoy: **zona="Laureles, Medellín", categoría="restaurantes"**
+(170 negocios guardados, confirmado 26/08/2026).

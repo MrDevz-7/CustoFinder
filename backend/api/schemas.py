@@ -28,6 +28,27 @@ class SearchResponse(BaseModel):
     # misma zona/categoría. Ver AllOverpassMirrorsFailedError en
     # scrapers/maps_discovery.py y docs/DECISIONES_TECNICAS.md.
     source: str = "live"
+class BusinessOut(BaseModel):
+    """
+    Negocio descubierto por /api/search, ahora expuesto con su `id` real
+    (antes solo se guardaba en la base y nunca viajaba al frontend). Sin
+    este `id` el frontend no tiene forma de llamar a
+    POST /api/leads/{business_id}/analyze -- era el hueco que impedía
+    generar leads desde la UI. `lead_id` viaja si ya existe un Lead para
+    este negocio (ya se analizó antes), para que el frontend pueda
+    linkear directo a /leads/{lead_id} en vez de re-analizar.
+    """
+    id: int
+    name: str
+    category: Optional[str] = None
+    address: Optional[str] = None
+    zone: Optional[str] = None
+    phone: Optional[str] = None
+    has_website: bool
+    rating: Optional[float] = None
+    review_count: Optional[int] = None
+    lead_id: Optional[int] = None
+    lead_analyzed: bool = False
 class HealthResponse(BaseModel):
     status: str
     environment: str
