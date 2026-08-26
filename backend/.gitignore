@@ -7,3 +7,4 @@ __pycache__/
 *_test_output.txt
 *.tmp
 email_draft_test.txt
+.env.docker-test
