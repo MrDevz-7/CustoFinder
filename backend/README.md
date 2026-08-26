@@ -6,8 +6,8 @@ evalúa con IA (Gemini), analiza a su competencia local (Playwright), lleva
 el seguimiento del pipeline de ventas, y mide efectividad por segmento.
 
 Este README cubre el setup del **backend** (FastAPI + PostgreSQL +
-SQLAlchemy). El frontend (Next.js/TypeScript) se aborda desde Día 4 en la
-carpeta hermana `frontend/` — **no dentro de `backend/`**.
+SQLAlchemy). El frontend (Next.js/TypeScript) vive en la carpeta hermana
+`frontend/` — **no dentro de `backend/`**. Ver su propio README ahí.
 
 ## Requisitos
 
