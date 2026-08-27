@@ -164,7 +164,7 @@ Invoke-RestMethod -Uri "http://localhost:8000/api/leads/1/stage" -Method Patch -
 Invoke-RestMethod -Uri "http://localhost:8000/api/leads/1/pipeline-history" -Method Get
 ```
 
-**Ver efectividad por segmento (Día 6):**
+**Ver efectividad por segmento:**
 
 ```powershell
 Invoke-RestMethod -Uri "http://localhost:8000/api/dashboard/effectiveness" -Method Get
@@ -242,7 +242,7 @@ actualizar DOS lugares que deben coincidir manualmente: la lista
 `database/models.py` (tabla `leads`). No hay una sola fuente de verdad
 para esto todavía.
 
-## Scheduler (conectado desde Día 6)
+## Scheduler
 
 `scheduler/jobs.py` contiene `check_stale_new_leads()`: revisa leads en
 etapa "nuevo" analizados hace más de `STALE_NUEVO_DAYS` días (hoy: 3) sin
@@ -272,12 +272,12 @@ importantes:
   el contador de 24h **se reinicia** — el scheduler vive en memoria del
   proceso, no persiste el último `run_at` en la base de datos.
 
-## Efectividad por segmento (Día 6)
+## Efectividad por segmento
 
 `tracker/segment_analyzer.py` agrupa los leads ya analizados (con
-`urgency_score` asignado) por **rubro + zona + rango de score** (`0-33`,
-`34-66`, `67-100`) y calcula, para cada combinación, cuántos leads llegaron
-ahí y cuántos convirtieron.
+`urgency_score` asignado) por **rubro + zona + rango de score** (`0-3.3`
+baja, `3.4-6.6` media, `6.7-10` alta) y calcula, para cada combinación,
+cuántos leads llegaron ahí y cuántos convirtieron.
 
 **Definición de conversión:** un lead cuenta como convertido si existe al
 menos un `PipelineEvent` con `to_stage == "cerrado"` en su historial — es
@@ -304,7 +304,7 @@ excluyen del cálculo.
 - `POST /api/leads/{lead_id}/competitors` — analiza competencia local (reemplaza análisis previo).
 - `PATCH /api/leads/{lead_id}/stage` — cambia etapa de pipeline.
 - `GET /api/leads/{lead_id}/pipeline-history` — historial de etapas.
-- `GET /api/dashboard/effectiveness?zone=...&category=...` — efectividad por segmento (Día 6).
+- `GET /api/dashboard/effectiveness?zone=...&category=...` — efectividad por segmento.
 
 ## Estructura del proyecto
 
@@ -325,22 +325,22 @@ CustoFinder/
 │   │   ├── gemini_client.py
 │   │   ├── prompt_builder.py
 │   │   └── lead_evaluator.py
-│   ├── scheduler/          # Jobs programados — conectado desde Día 6
+│   ├── scheduler/          # Jobs programados en background
 │   │   └── jobs.py
-│   ├── tracker/            # Día 6 — analytics de efectividad por segmento
+│   ├── tracker/            # Analytics de efectividad por segmento
 │   │   └── segment_analyzer.py
 │   ├── alembic/             # Migraciones de base de datos
 │   ├── docker-compose.yml
 │   ├── requirements.txt
 │   ├── .env.example
 │   └── README.md            # este archivo
-├── frontend/                 # Next.js + TypeScript — desde Día 4
+├── frontend/                 # Next.js + TypeScript
 │   └── src/app/
-│       ├── search/           # Día 4 — búsqueda de negocios
-│       ├── leads/             # Día 4-5 — lista y detalle de leads
-│       ├── pipeline/          # Día 5 — kanban drag-and-drop
-│       └── analytics/         # Día 6 — efectividad por segmento
-└── docs/                     # Checklists e informes de cierre por día
+│       ├── search/           # Búsqueda de negocios
+│       ├── leads/             # Lista y detalle de leads
+│       ├── pipeline/          # Kanban drag-and-drop
+│       └── analytics/         # Efectividad por segmento
+└── docs/                     # Checklists e informes de cierre
 ```
 
 ## Comandos útiles de Alembic
@@ -360,6 +360,6 @@ docker compose down -v       # detiene Postgres Y borra los datos (volumen)
 
 ## Checkpoints en GitHub
 
-Repo: https://github.com/MrDevz-7/CustoFinder — un commit por día de
-desarrollo. Al final de cada día: `git add .`, `git commit -m "Día N: ..."`,
-`git push`.
+Repo: https://github.com/MrDevz-7/CustoFinder. Flujo habitual: `git add .`,
+`git commit -m "mensaje descriptivo"`, `git push` — Render y Vercel hacen
+auto-deploy en cada push a `main`.

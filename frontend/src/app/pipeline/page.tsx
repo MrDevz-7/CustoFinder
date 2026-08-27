@@ -1,6 +1,5 @@
 // frontend/src/app/pipeline/page.tsx
 "use client";
-
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
@@ -11,7 +10,6 @@ import {
 } from "@dnd-kit/core";
 import { getLeads, updateLeadStage } from "@/lib/api";
 import { LeadListItem, PipelineStage } from "@/types/api";
-
 const COLUMNS: { value: PipelineStage; label: string }[] = [
   { value: "nuevo", label: "Nuevo" },
   { value: "contactado", label: "Contactado" },
@@ -20,19 +18,16 @@ const COLUMNS: { value: PipelineStage; label: string }[] = [
   { value: "cerrado", label: "Cerrado" },
   { value: "descartado", label: "Descartado" },
 ];
-
 function LeadCard({ lead }: { lead: LeadListItem }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: String(lead.id),
   });
-
   const style = transform
     ? {
         transform: `translate(${transform.x}px, ${transform.y}px)`,
         zIndex: isDragging ? 10 : undefined,
       }
     : undefined;
-
   return (
     <div
       ref={setNodeRef}
@@ -55,7 +50,6 @@ function LeadCard({ lead }: { lead: LeadListItem }) {
     </div>
   );
 }
-
 function Column({
   stage,
   label,
@@ -66,7 +60,6 @@ function Column({
   leads: LeadListItem[];
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: stage });
-
   return (
     <div
       ref={setNodeRef}
@@ -85,15 +78,12 @@ function Column({
     </div>
   );
 }
-
 export default function PipelinePage() {
   const [leads, setLeads] = useState<LeadListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
   useEffect(() => {
     let cancelled = false;
-
     async function loadLeads() {
       setLoading(true);
       setError(null);
@@ -107,28 +97,23 @@ export default function PipelinePage() {
         if (!cancelled) setLoading(false);
       }
     }
-
     loadLeads();
     return () => {
       cancelled = true;
     };
   }, []);
-
   async function handleDragEnd(event: DragEndEvent) {
     const { active, over } = event;
     if (!over) return;
-
     const leadId = Number(active.id);
     const newStage = String(over.id);
     const lead = leads.find((l) => l.id === leadId);
     if (!lead || lead.pipeline_stage === newStage) return;
-
     const previousStage = lead.pipeline_stage;
-
+    setError(null);
     setLeads((prev) =>
       prev.map((l) => (l.id === leadId ? { ...l, pipeline_stage: newStage } : l))
     );
-
     try {
       await updateLeadStage(leadId, { stage: newStage });
     } catch (err) {
@@ -140,11 +125,9 @@ export default function PipelinePage() {
       );
     }
   }
-
   if (loading) {
     return <main className="p-8">Cargando pipeline...</main>;
   }
-
   return (
     <main className="p-6 space-y-4">
       <h1 className="text-2xl font-bold">Pipeline de leads</h1>

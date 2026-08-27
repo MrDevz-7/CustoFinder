@@ -1,4 +1,3 @@
-
 // frontend/src/app/leads/page.tsx
 "use client";
 import { useEffect, useState } from "react";
@@ -86,12 +85,12 @@ export default function LeadsPage() {
             type="number"
             value={minUrgency}
             onChange={(e) => setMinUrgency(e.target.value)}
-            placeholder="0-100"
+            placeholder="0-10"
             className="w-32"
           />
         </div>
       </div>
-      {loading && <p className="text-sm text-gray-500">Cargando...</p>}
+      {loading && <p className="text-sm text-muted-foreground">Cargando...</p>}
       {error && <p className="text-red-600 text-sm">Error: {error}</p>}
       {!loading && !error && (
         <Table>

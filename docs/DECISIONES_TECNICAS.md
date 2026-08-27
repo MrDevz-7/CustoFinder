@@ -58,45 +58,34 @@ de salida de Render (al menos en el plan Free) no tiene ruta configurada
 para IPv6 saliente, así que cualquier intento de conexión por esa vía
 falla a nivel de sistema operativo, antes de llegar al servidor.
 
-**Decisión:** `_ipv4_client()` en `scrapers/maps_discovery.py` fuerza
-`httpx.HTTPTransport(local_address="0.0.0.0")`, que liga el socket a una
-dirección IPv4 local y descarta cualquier intento por IPv6. Cambio de bajo
-riesgo: si el servidor de destino tiene IPv4 disponible (caso normal), el
+**Decisión:** `_ipv4_client()` en `scrapers/maps_discovery.py` fuerza la
+resolución DNS a IPv4 únicamente mientras está activo, mediante un parcheo
+temporal y thread-safe de `socket.getaddrinfo()`. Cambio de bajo riesgo: si
+el servidor de destino tiene IPv4 disponible (caso normal), el
 comportamiento no cambia; si el diagnóstico es correcto, resuelve el error.
-
 
 ## Fallos silenciosos de Overpass: "200 OK, 0 negocios" no es lo mismo que "sin resultados"
 
-**Contexto:** después de resolver el 502 de la salida IPv4 (sección
-anterior), `/api/search` empezó a devolver `200 OK` con `businesses_found: 0`
-de forma sistemática (2 de 2 corridas confirmadas en logs de Render,
-25/08/2026). Los logs mostraban `private.coffee` con timeout,
-`overpass-api.de` con connection refused, y `maps.mail.ru` con `200 OK`
-justo antes del "0 negocios".
+**Contexto:** Overpass API es infraestructura pública compartida entre toda
+la comunidad de OpenStreetMap, sin SLA. Cuando tiene un fallo interno (cuota
+agotada, rate limit silencioso, timeout del lado del servidor), responde con
+status HTTP **200** y un campo `"remark"` en el JSON explicando el error —
+**no** usa un status de error HTTP.
 
-**Diagnóstico:** cuando Overpass tiene un fallo interno (cuota agotada,
-rate limit silencioso, timeout del lado del servidor), responde con
-status HTTP 200 y un campo `"remark"` en el JSON explicando el error —
-**no** usa un status de error. El código anterior hacía
-`response.json().get("elements", [])` e ignoraba `remark` por completo,
-tratando cualquier lista vacía como "esta zona no tiene negocios de esa
-categoría", sin distinguir eso de "el mirror me bloqueó".
-
-Confirmado además (26/08/2026, wiki oficial de OSM en vivo): a esa fecha
-solo existen 3 mirrors globales gratuitos sin API key (overpass-api.de,
-maps.mail.ru, overpass.private.coffee) — los 2 mirrors adicionales que se
-habían considerado (`overpass.openstreetmap.fr`, `overpass.openstreetmap.ru`)
-ya no figuran en la lista oficial, así que no se agregaron.
+**Diagnóstico:** el código original hacía `response.json().get("elements", [])`
+e ignoraba `remark` por completo, tratando cualquier lista vacía como "esta
+zona no tiene negocios de esa categoría", sin distinguir eso de "el mirror
+tuvo un problema interno".
 
 **Decisión:**
 1. `_overpass_query()` en `scrapers/maps_discovery.py` ahora lee `remark`:
    si viene junto con `elements` vacío, se trata como fallo de ESE mirror
    (se loggea el remark exacto y se prueba el siguiente), no como un
    resultado legítimo.
-2. Se reordenó `OVERPASS_URLS` con `maps.mail.ru` primero (es el único que
-   completa el handshake TCP desde el rango de IPs de Render hoy),
-   `private.coffee` segundo, `overpass-api.de` último (rechaza la
-   conexión activamente).
+2. `OVERPASS_URLS` mantiene una lista de mirrors públicos con un orden de
+   preferencia, ajustado según pruebas de conectividad reales desde el
+   entorno de despliegue — el orden se revisa si aparece evidencia nueva de
+   que conviene cambiarlo.
 3. Se agregó `AllOverpassMirrorsFailedError`, subclase de `PlacesAPIError`,
    para distinguir "la infraestructura de Overpass está degradada" de
    otros errores (categoría no soportada, zona no geocodificable).
@@ -105,37 +94,20 @@ ya no figuran en la lista oficial, así que no se agregaron.
    corrida exitosa guardada en Postgres para la misma zona/categoría y la
    devuelve marcada con `source: "cache"` en vez de responder 502 seco.
    Esto es clave porque el proyecto depende de infraestructura pública
-   gratuita (tragedy of the commons documentado por la propia comunidad de
-   OSM) que puede estar degradada en el momento exacto de una demo en
-   vivo — un simple 502 en ese momento sería peor que mostrar el último
-   resultado conocido con una advertencia clara.
+   gratuita (un problema de "tragedy of the commons" documentado por la
+   propia comunidad de OSM) que puede estar degradada en el momento exacto
+   de una demo en vivo — un simple 502 en ese momento sería peor que
+   mostrar el último resultado conocido con una advertencia clara.
 
 **Limitación conocida:** el match de caché es por texto exacto de zona
 (case-insensitive). Si se busca "Poblado" una vez y "El Poblado, Medellín"
 otra vez, no las relaciona — son strings distintos. Suficiente para el
 caso de uso actual (repetir la misma búsqueda), no para geocodificación
-difusa.
+difusa. Para una demo garantizada, la UI ofrece un botón de "zona de demo"
+con datos ya confirmados en la base.
 
-
-**Estado final (26/08/2026):** confirmado en producción que el problema
-de fondo es 100% externo — en una prueba real los 3 mirrors fallaron
-simultáneamente (timeout, 502 propio del mirror, connection refused);
-minutos después, la misma búsqueda exacta devolvió `200 OK` con datos
-reales. Esto coincide con reportes activos en el foro de OSM durante todo
-2026 sobre sobrecarga del servicio (enero, mayo, julio, agosto). **No se
-persigue más este problema con cambios de código** — es una limitación
-aceptada del stack 100% gratuito, ya mitigada con el respaldo de caché.
-Para demos en vivo, usar una zona/categoría con datos ya confirmados en
-Postgres — hoy: **zona="Laureles, Medellín", categoría="restaurantes"**
-(170 negocios guardados, confirmado 26/08/2026).
-
-## Nota de mantenimiento — limpieza de comentarios (26/08/2026)
-
-Los docstrings largos de `gemini_client.py`, `models.py`,
-`competitor_scraper.py` y `segment_analyzer.py` se acortaron a lo
-esencial. El razonamiento completo de cada decisión (por qué REST directo
-en vez del SDK de Gemini, por qué Alembic desde el día 1, por qué
-Postgres real y no SQLite, la definición exacta de "conversión" en
-analytics) ya estaba documentado en las secciones existentes de este
-archivo o en los informes de cierre de `docs/`; no se perdió información,
-solo se movió del código al lugar correcto.
+**Conclusión:** el problema de fondo es externo al proyecto — degradación
+periódica de infraestructura pública gratuita, reportada activamente por la
+propia comunidad de OSM. No se persigue como un bug de código; es una
+limitación aceptada y documentada del enfoque 100% gratuito, ya mitigada
+con el respaldo de caché.
